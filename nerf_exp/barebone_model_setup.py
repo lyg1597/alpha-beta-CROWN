@@ -159,8 +159,11 @@ camera = Cameras(
 
 camera = camera.to(device)
 
-tmp = model.get_outputs(camera)
-img = tmp['rgb'].cpu().detach().numpy()
+for i in range(10):
+    with torch.no_grad():
+        tmp = model.get_outputs(camera)
+    img = tmp['rgb'].cpu().detach().numpy()
+    print(img.shape)
 
 plt.imshow(img)
 plt.show()
