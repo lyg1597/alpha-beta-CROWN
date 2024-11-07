@@ -44,6 +44,25 @@ def compute_order(vec):
     print(order_matrix)
     return order_matrix
 
+def apply_reorder1(vec, reorder):
+    res = np.zeros(vec.shape)
+    for i in range(reorder.shape[0]):
+        for j in range(reorder.shape[1]):
+            res[i,0,0] += min(vec[j,0,0]*reorder[i,j,0], vec[j,0,0]*reorder[i,j,1],vec[j,0,1]*reorder[i,j,0], vec[j,0,1]*reorder[i,j,1])
+            res[i,0,1] += max(vec[j,0,0]*reorder[i,j,0], vec[j,0,0]*reorder[i,j,1],vec[j,0,1]*reorder[i,j,0], vec[j,0,1]*reorder[i,j,1])
+    return res 
+
+def apply_reorder2(vec, reorder):
+    res = np.zeros(vec.shape)
+    res[:,0,0] = np.double('inf')
+    for i in range(reorder.shape[0]):
+        # max_min = np.double('inf')
+        for j in range(reorder.shape[1]):
+            if reorder[i,j,1]==1:
+                res[i,0,0] = min(res[i,0,0], vec[j,0,0])
+                # max_min = min(max_min, vec[i,0,0])
+                res[i,0,1] = max(res[i,0,1], vec[j,0,1])
+    return res 
 
 if __name__ == "__main__":
     # pos_x = np.expand_dims(np.random.uniform(0,10,10),1)
@@ -106,8 +125,8 @@ if __name__ == "__main__":
     plt.plot(dist_high[:,0,0])
     plt.plot(dist_low[:,0,0])
 
-    opacities = np.array([4.87042955, 2.64895704, 0.5150249 , 4.77657275, 2.02472903,
-       0.79257567, 4.50041547, 2.67383042, 0.34976735, 1.12018909])
+    opacities = np.array([0.77353248, 0.0596479 , 0.118955  , 0.75224626, 0.15769205,
+       0.58342989, 0.88040631, 0.24178431, 0.3251487 , 0.50760633])
     opacities = np.expand_dims(opacities, axis=(1,2))
     opacities = np.concatenate((opacities, opacities), axis=2)
     print(opacities.shape)
@@ -128,6 +147,21 @@ if __name__ == "__main__":
     #     reorder_center[i, reorder_center]
 
     reorder_res = compute_order(dist)
+
+    opacities_reorder = apply_reorder1(opacities, reorder_res)
+    colors_reorder = apply_reorder1(colors, reorder_res)
+
+    print(opacities_reorder[:,0,0],opacities_reorder[:,0,1])
+    print(colors_reorder[:,0,0],colors_reorder[:,0,1])
+
+    opacities_reorder = apply_reorder2(opacities, reorder_res)
+    colors_reorder = apply_reorder2(colors, reorder_res)
+
+    print(opacities_reorder[:,0,0])
+    print(opacities_reorder[:,0,1])
+    print(colors_reorder[:,0,0])
+    print(colors_reorder[:,0,1])
+
 
     # plt.figure(0)
     # for x in range(10):
