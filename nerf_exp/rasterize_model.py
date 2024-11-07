@@ -1100,10 +1100,10 @@ class RasterizationModel_notile(torch.nn.Module):
         # color = torch.bmm(coeffs_T, x) 
         # color = color.squeeze(1)
         color_rgb = torch.nn.functional.relu(color+0.5)
-        return color_rgb
+        # return color_rgb
         # res2 = (self.T_alpha_unsorted*color_rgb).sum(dim=1)
         res2 = torch.matmul(self.T_alpha_unsorted, color_rgb)
-        res2 = res2.reshape(self.H, self.W, -1)
+        # res2 = res2.reshape(self.H, self.W, -1)
         # return color_rgb
         # color_rgb_sorted = color_rgb[:,self.index]
         # color_rgb_sorted = color_rgb

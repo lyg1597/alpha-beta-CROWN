@@ -208,7 +208,7 @@ def render(means2D, cov2D, radii, color, opacity, depths, W, H, device='cuda', t
             sorted_means2D = means2D[in_mask][index]
             sorted_cov2D = cov2D[in_mask][index] # P 2 2
             sorted_conic = sorted_cov2D.inverse() # inverse of variance
-            sorted_opacity = opacity[in_mask][index]
+            sorted_opacity = opacity[in_mask][index].unsqueeze(1)
             sorted_color = color[in_mask][index]
             dx = (tile_coord[:,None,:] - sorted_means2D[None,:]) # B P 2
             
@@ -440,6 +440,7 @@ def rasterize_gaussians_pytorch(
     res = render(
         means2D=means2D,
         cov2D=cov2D,
+        radii=radius,
         color=color_rgb,
         opacity=opacities,
         depths = means_cam[:,2],
@@ -447,7 +448,7 @@ def rasterize_gaussians_pytorch(
         H=height,
         tile_size=tile_size
     )
-    return res['rendered']
+    return res['render']
 
     #==========================================================================================
 

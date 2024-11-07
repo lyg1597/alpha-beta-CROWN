@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from rasterize_model import RasterizationModel, RasterizationModel_notile
 from gsplat import rasterization
 import cv2 
+from test2 import rasterize_gaussians_pytorch
 
 def get_viewmat(optimized_camera_to_world):
     """
@@ -162,10 +163,14 @@ class SplatModel(torch.nn.Module):
 
         self.opacities = self.model.opacities
         self.means = self.model.means
-        self.ones = torch.ones(self.means.shape[0], 1, device=self.means.device)
         # base_color = self.model.base_colors
         self.scales = self.model.scales
         self.quats = self.model.quats
+
+        # self.opacities = self.opacities.unsqueeze(0)
+        # self.means = self.means.unsqueeze(0)
+        # self.scales = self.scales.unsqueeze(0)
+        # self.quats = self.quats.unsqueeze(0)
         
         # apply the compensation of screen space blurring to gaussians
         self.BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
@@ -239,8 +244,8 @@ class SplatModel(torch.nn.Module):
             # res_list.append(img)
         # env_params = x
         # print(env_params.device)
-        # env_params_repeat = env_params.repeat(self.means.shape[0], 1)
-        env_params_repeat = torch.matmul(self.ones, x)
+        env_params_repeat = x.repeat(self.means.shape[0], 1)
+        # env_params_repeat = torch.matmul(self.ones, x)
         # return env_params_repeat
         # print(env_params.device)
         # colors = self.model.color_nn(
@@ -343,9 +348,9 @@ if __name__ == "__main__":
 
     fn = "frames_00775_gs.png"
 
-    width=2560
-    height=1440
-    f = 2343.0242837919386
+    width=80
+    height=60
+    f = 240.0
 
     model = SplatModel(
         output_folder=output_folder,
@@ -381,28 +386,45 @@ if __name__ == "__main__":
         [0, 0, 1]
     ]]).to(torch.device('cuda'))
 
+    # with torch.no_grad():
+    #     res = rasterization(
+    #         model.means,
+    #         model.quats/ model.quats.norm(dim=-1, keepdim=True),
+    #         torch.exp(model.scales),
+    #         torch.sigmoid(model.opacities).squeeze(-1),
+    #         res_2d,
+    #         view_mats,      # 
+    #         Ks,
+    #         model.width,
+    #         model.height,
+    #         sh_degree=3
+    #     )
+
+    # rendered = res[0]
+    # print(rendered.shape)
+    # rendered = rendered.detach().cpu().numpy()[0]
+    # print(rendered.shape)
+    # image_uint8 = (np.clip(rendered, 0, 1)*255).astype(np.uint8)
+    # image_bgr = cv2.cvtColor(image_uint8, cv2.COLOR_RGB2BGR)
+    # cv2.imwrite(fn, image_bgr)
+    # plt.imshow(rendered)
+    # plt.show()
+
     with torch.no_grad():
-        res = rasterization(
-            model.means,
+        res = rasterize_gaussians_pytorch(
+            model.means, 
             model.quats/ model.quats.norm(dim=-1, keepdim=True),
             torch.exp(model.scales),
             torch.sigmoid(model.opacities).squeeze(-1),
             res_2d,
-            view_mats,      # 
+            view_mats, 
             Ks,
             model.width,
-            model.height,
-            sh_degree=3
+            model.height
         )
-
-    rendered = res[0]
-    print(rendered.shape)
-    rendered = rendered.detach().cpu().numpy()[0]
-    print(rendered.shape)
-    image_uint8 = (np.clip(rendered, 0, 1)*255).astype(np.uint8)
-    image_bgr = cv2.cvtColor(image_uint8, cv2.COLOR_RGB2BGR)
-    cv2.imwrite(fn, image_bgr)
-    plt.imshow(rendered)
+    print(res.shape)
+    res = res.detach().cpu().numpy()
+    plt.imshow(res)
     plt.show()
 
     # with torch.no_grad():
@@ -423,7 +445,7 @@ if __name__ == "__main__":
     # lb, ub = model_bounded.compute_bounds(x=(my_input, ), method='backward')
     # print(lb,ub)
 
-    model = RasterizationModel(
+    model = RasterizationModel_notile(
         output_folder=output_folder,
         camera_pose = camera_pose,
         width=width,
@@ -444,18 +466,18 @@ if __name__ == "__main__":
     plt.imshow(res)
     plt.show()
     
-    # my_input = torch.clone(res_2d[model.overall_mask])
-    # print(">>>>>> Starting Bounded Module")
-    # model_bounded = BoundedModule(model, my_input, device=res_2d.device)
-    # print(">>>>>> Starting PerturbationLpNorm")
-    # ptb = PerturbationLpNorm(norm=np.inf, eps=0.1)
-    # print(">>>>>> Starting BoundedTensor")
-    # my_input = BoundedTensor(my_input, ptb)
-    # prediction = model_bounded(my_input)
-    # lb, ub = model_bounded.compute_bounds(x=(my_input, ), method='backward')
-    # print(">>>>>> Done")
-    # print(lb.shape)
-    # print(ub.shape)
+    my_input = torch.clone(res_2d[model.overall_mask])
+    print(">>>>>> Starting Bounded Module")
+    model_bounded = BoundedModule(model, my_input, device=res_2d.device)
+    print(">>>>>> Starting PerturbationLpNorm")
+    ptb = PerturbationLpNorm(norm=np.inf, eps=0.1)
+    print(">>>>>> Starting BoundedTensor")
+    my_input = BoundedTensor(my_input, ptb)
+    prediction = model_bounded(my_input)
+    lb, ub = model_bounded.compute_bounds(x=(my_input, ), method='backward')
+    print(">>>>>> Done")
+    print(lb.shape)
+    print(ub.shape)
 
     # res_lb = torch.matmul(model.T_alpha_unsorted, lb).reshape(model.H, model.W, -1)
     # res_ub = torch.matmul(model.T_alpha_unsorted, ub).reshape(model.H, model.W, -1)
