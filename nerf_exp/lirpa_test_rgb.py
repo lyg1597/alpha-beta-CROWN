@@ -8,10 +8,10 @@ import os
 import numpy as np 
 # from nerfstudio.cameras.cameras import Cameras, CameraType
 import matplotlib.pyplot as plt 
-from rasterize_model import RasterizationModel, RasterizationModel_notile
+from rasterize_model import RasterizationModel, RasterizationModel_notile, RasterizationModelRGB_notile
 from gsplat import rasterization
 # import cv2 
-from test2 import rasterize_gaussians_pytorch
+from test2 import rasterize_gaussians_pytorch, rasterize_gaussians_pytorch_rgb
 from splat_model import SplatModel
 
 def get_viewmat(optimized_camera_to_world):
@@ -33,8 +33,9 @@ def get_viewmat(optimized_camera_to_world):
 
 if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    output_folder = os.path.join(script_dir, '../../nerfstudio/outputs/gazebo5_transformed_env-3/splatfacto-env/2024-10-18_161243/')
-
+    output_folder = os.path.join(script_dir, '../../nerfstudio/outputs/gazebo5_transformed_env-1/splatfacto-env-rgb/2024-11-18_154538/')
+    checkpoint = "step-000029999.ckpt"
+    
     camera_pose = np.array([
                 [
                     -0.23762398510466104,
@@ -64,18 +65,19 @@ if __name__ == "__main__":
 
     fn = "frames_00775_gs.png"
 
-    width=2560
-    height=1440
-    f = 2300.0
+    width=80
+    height=60
+    f = 480.0
 
     model = SplatModel(
         output_folder=output_folder,
         camera_pose = camera_pose,
-        checkpoint="step-000089999.ckpt",
+        checkpoint=checkpoint,
         width=width,
         height=height,
         fx = f,
         fy = f,
+        use_sh = False
     )
     my_input = torch.Tensor(np.array([[0.0,0.0]])).to(torch.device('cuda'))
     with torch.no_grad():
@@ -114,57 +116,60 @@ if __name__ == "__main__":
     #         Ks,
     #         model.width,
     #         model.height,
-    #         sh_degree=3
+    #         sh_degree=None,
     #     )
 
     # rendered = res[0]
     # print(rendered.shape)
     # rendered = rendered.detach().cpu().numpy()[0]
     # print(rendered.shape)
+    # rendered = rendered[:,...,:3]
     # image_uint8 = (np.clip(rendered, 0, 1)*255).astype(np.uint8)
-    # image_bgr = cv2.cvtColor(image_uint8, cv2.COLOR_RGB2BGR)
-    # cv2.imwrite(fn, image_bgr)
+    # # image_bgr = cv2.cvtColor(image_uint8, cv2.COLOR_RGB2BGR)
+    # # cv2.imwrite(fn, image_bgr)
     # plt.imshow(rendered)
     # plt.show()
-
-    with torch.no_grad():
-        res = rasterize_gaussians_pytorch(
-            model.means, 
-            model.quats/ model.quats.norm(dim=-1, keepdim=True),
-            torch.exp(model.scales),
-            torch.sigmoid(model.opacities).squeeze(-1),
-            res_2d,
-            view_mats, 
-            Ks,
-            model.width,
-            model.height
-        )
-    print(res.shape)
-    res = res.detach().cpu().numpy()
-    plt.imshow(res)
-    plt.show()
 
     # with torch.no_grad():
-    #     res, colors_gt, rasterizer_input = model.model.get_outputs(
-    #         model.camera,
-    #         debug = True
+    #     res = rasterize_gaussians_pytorch_rgb(
+    #         model.means, 
+    #         model.quats/ model.quats.norm(dim=-1, keepdim=True),
+    #         torch.exp(model.scales),
+    #         torch.sigmoid(model.opacities).squeeze(-1),
+    #         res_2d,
+    #         view_mats, 
+    #         Ks,
+    #         model.width,
+    #         model.height
     #     )
-    # rendered = res['rgb']
-    # print(rendered.shape)
-    # rendered = rendered.detach().cpu().numpy()
-    # plt.imshow(rendered)
+    # print(res.shape)
+    # res = res[:,...,:3]
+    # res = res.detach().cpu().numpy()
+    # plt.imshow(res)
     # plt.show()
 
-    # model_bounded = BoundedModule(model, my_input)
-    # ptb = PerturbationLpNorm(norm=np.inf, eps=0.1)
-    # my_input = BoundedTensor(my_input, ptb)
-    # prediction = model_bounded(my_input)
-    # lb, ub = model_bounded.compute_bounds(x=(my_input, ), method='backward')
-    # print(lb,ub)
+    # # with torch.no_grad():
+    # #     res, colors_gt, rasterizer_input = model.model.get_outputs(
+    # #         model.camera,
+    # #         debug = True
+    # #     )
+    # # rendered = res['rgb']
+    # # print(rendered.shape)
+    # # rendered = rendered.detach().cpu().numpy()
+    # # plt.imshow(rendered)
+    # # plt.show()
 
-    model = RasterizationModel_notile(
+    # # model_bounded = BoundedModule(model, my_input)
+    # # ptb = PerturbationLpNorm(norm=np.inf, eps=0.1)
+    # # my_input = BoundedTensor(my_input, ptb)
+    # # prediction = model_bounded(my_input)
+    # # lb, ub = model_bounded.compute_bounds(x=(my_input, ), method='backward')
+    # # print(lb,ub)
+
+    model = RasterizationModelRGB_notile(
         output_folder=output_folder,
         camera_pose = camera_pose,
+        checkpoint = checkpoint,
         width=width,
         height=height,
         fx = f,
@@ -179,11 +184,16 @@ if __name__ == "__main__":
     with torch.no_grad():
         res = model(tmp)
     print(res.shape)
+    # res = res[:,...,:3]
     res = res.detach().cpu().numpy()
+    res = res.reshape((60, 80, -1))
+    res = res[:,...,:3]
     plt.imshow(res)
     plt.show()
+    # view_mats = model.viewmat
     
-    my_input = torch.clone(res_2d[model.overall_mask])
+    # my_input = torch.clone(res_2d[model.overall_mask])
+    my_input = torch.clone(view_mats)
     print(">>>>>> Starting Bounded Module")
     model_bounded = BoundedModule(model, my_input, device=res_2d.device)
     print(">>>>>> Starting PerturbationLpNorm")

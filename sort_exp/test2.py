@@ -186,7 +186,7 @@ def render(means2D, cov2D, radii, color, opacity, depths, W, H, device='cuda', t
     # radii = get_radius(cov2D)
     rect = get_rect(means2D, radii, width=W, height=H)
     
-    render_color = torch.ones(*pix_coord.shape[:2], color.shape[-1]).to(device)
+    render_color = torch.ones(*pix_coord.shape[:2], 3).to(device)
     render_depth = torch.zeros(*pix_coord.shape[:2], 1).to(device)
     render_alpha = torch.zeros(*pix_coord.shape[:2], 1).to(device)
 
@@ -248,6 +248,8 @@ def render_mask(means2D, cov2D, radii, color, opacity, depths, W, H, device='cud
     min_inmask_len = float('inf')
     # tile_size = 64
     min_inmask = None
+    min_h = None 
+    min_w = None 
     for h in range(0, H, tile_size):
         for w in range(0, W, tile_size):
             # check if the rectangle penetrate the tile
@@ -269,9 +271,13 @@ def render_mask(means2D, cov2D, radii, color, opacity, depths, W, H, device='cud
             sorted_color = color[in_mask][index]
             dx = (tile_coord[:,None,:] - sorted_means2D[None,:]) # B P 2
             
-            if len(torch.where(in_mask)[0])<min_inmask_len:
-                min_inmask_len = len(torch.where(in_mask)[0])
-                min_inmask = in_mask
+            if 1270<w<1290 and 710<h<730:
+                return in_mask, h, w 
+            # if len(torch.where(in_mask)[0])<min_inmask_len:
+            #     min_inmask_len = len(torch.where(in_mask)[0])
+            #     min_inmask = in_mask
+            #     min_h = h 
+            #     min_w = w 
             
             # gauss_weight = torch.exp(-0.5 * (
             #     dx[:, :, 0]**2 * sorted_conic[:, 0, 0] 
@@ -288,7 +294,7 @@ def render_mask(means2D, cov2D, radii, color, opacity, depths, W, H, device='cud
             # render_color[h:h+tile_h, w:w+tile_w] = tile_color.reshape(tile_h, tile_w, -1)
             # render_depth[h:h+tile_h, w:w+tile_w] = tile_depth.reshape(tile_h, tile_w, -1)
             # render_alpha[h:h+tile_h, w:w+tile_w] = acc_alpha.reshape(tile_h, tile_w, -1)
-    return min_inmask
+    return min_inmask, min_h, min_w 
     # return {
     #     "render": render_color,
     #     "depth": render_depth,
@@ -511,156 +517,6 @@ def rasterize_gaussians_pytorch(
     )
     return res['render']
 
-def rasterize_gaussians_pytorch_rgb(
-        means, 
-        quats, 
-        scales, 
-        opacities, 
-        colors, 
-        viewmats, 
-        Ks, 
-        width, 
-        height, 
-        near_plane=0.01, 
-        far_plane=1e10, 
-        sh_degree=3, 
-        tile_size=16,
-        eps2d = 0.3,
-        radius_clip = 0.0
-    ):
-    device = means.device
-    dtype = means.dtype
-
-    # For simplicity, we'll render from the first camera
-    viewmat = viewmats[0]  # [4, 4]
-    K = Ks[0]              # [3, 3]
-
-    N = means.size(0)
-
-    # Step 1: Transform Gaussian centers to camera space
-    ones = torch.ones(N, 1, device=device, dtype=dtype)
-    means_hom = torch.cat([means, ones], dim=1).to(device)  # [N, 4]
-    means_cam_hom = (viewmat @ means_hom.T).T    # [N, 4]
-    means_cam = means_cam_hom[:, :3] / means_cam_hom[:, 3:4]  # [N, 3]
-
-    mask = (means_cam[:,2]>near_plane) & (means_cam[:,2]<far_plane)
-    overall_mask = mask
-    # means = means[mask]
-    # means_cam = means_cam[mask]
-    # quats = quats[mask] 
-    # scales = scales[mask] 
-    # opacities = opacities[mask] 
-    # colors = colors[mask] 
-    # N = means_cam.size(0)  # Update N after masking
-
-    # Step 2: Compute rotation matrices from quaternions
-    R_gaussians = quaternion_to_rotation_matrix(quats)  # [N, 3, 3]
-
-    # Step 3: Compute covariance matrices in world space
-    scales_matrix = torch.diag_embed(scales).to(device)  # [N, 3, 3]
-    M = R_gaussians@scales_matrix
-    cov_world = M @ M.transpose(1, 2)  # [N, 3, 3]
-
-    # Step 4: Transform covariance matrices to camera space
-    R_cam = viewmat[:3, :3]  # [3, 3]
-    R_cam_expanded = R_cam.unsqueeze(0).expand(N, 3, 3)
-    cov_cam = R_cam_expanded @ cov_world @ R_cam_expanded.transpose(1, 2)  # [N, 3, 3]
-
-    # Step 5: Project means onto the image plane
-    means_proj_hom = (K @ means_cam.T).T  # [N, 3]
-    means2D = means_proj_hom[:, :2] / means_proj_hom[:, 2:3]  # [N, 2]
-
-    # Step 6: Compute 2D covariance matrices using the Jacobian
-    fx = K[0, 0]
-    fy = K[1, 1]
-    x = means_cam[:, 0]
-    y = means_cam[:, 1]
-    z_cam = means_cam[:, 2]
-
-    tan_fovx = 0.5*width/fx 
-    tan_fovy = 0.5*height/fy 
-    lim_x = 1.3*tan_fovx 
-    lim_y = 1.3*tan_fovy
-
-    tx = z_cam*torch.min(lim_x, torch.max(-lim_x, x/z_cam))
-    ty = z_cam*torch.min(lim_y, torch.max(-lim_y, y/z_cam))
-
-    J = torch.zeros(N, 2, 3, device=device, dtype=dtype)
-    J[:, 0, 0] = fx / z_cam
-    J[:, 0, 2] = -fx * tx / z_cam**2
-    J[:, 1, 1] = fy / z_cam
-    J[:, 1, 2] = -fy * ty / z_cam**2
-
-    cov2D = J @ cov_cam @ J.transpose(1, 2)  # [N, 2, 2]
-
-    det_orig = cov2D[:,0,0]*cov2D[:,1,1]-cov2D[:,0,1]*cov2D[:,1,0]
-    cov2D[:,0,0] = cov2D[:,0,0]+eps2d 
-    cov2D[:,1,1] = cov2D[:,1,1]+eps2d 
-    det_blur = cov2D[:,0,0]*cov2D[:,1,1]-cov2D[:,0,1]*cov2D[:,1,0]
-    compensation = torch.sqrt(torch.max(torch.zeros((det_orig/det_blur).shape).to(det_orig.device), det_orig/det_blur))
-    opacities = opacities * compensation
-    det = det_blur
-
-    mask = det_blur>0
-    overall_mask = overall_mask & mask 
-    # means = means[mask]
-    # means_cam = means_cam[mask]
-    # cov2D = cov2D[mask]
-    # means2D = means2D[mask]
-    # opacities = opacities[mask]
-    # colors = colors[mask]
-    # N = means2D.size(0)  # Update N after masking
-
-    cov2D_inv = torch.linalg.inv(cov2D)
-
-    # Step 7: Check if points are in image region 
-    # Take 3 sigma as the radius 
-    b = 0.5*(cov2D[:,0,0]+cov2D[:,1,1])
-    v1 = b+torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
-    v2 = b-torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
-    radius = torch.ceil(3*torch.sqrt(torch.max(v1, v2)))
-    
-    mask = radius>radius_clip
-    overall_mask = overall_mask & mask 
-    # means = means[mask]
-    # means_cam = means_cam[mask]
-    # cov2D = cov2D[mask]
-    # means2D = means2D[mask]
-    # opacities = opacities[mask]
-    # colors = colors[mask]
-    # radius = radius[mask]
-    # N = means2D.size(0)  # Update N after masking
-
-    # mask out gaussians outside the image region
-    mask = (means2D[:,0]+radius>0) & (means2D[:,0]-radius<width) & (means2D[:,1]+radius>0) & (means2D[:,1]-radius<height)
-    overall_mask = overall_mask & mask 
-    means = means[overall_mask]
-    means_cam = means_cam[overall_mask]
-    cov2D = cov2D[overall_mask]
-    means2D = means2D[overall_mask]
-    opacities = opacities[overall_mask]
-    colors = colors[overall_mask]
-    radius = radius[overall_mask]
-    N = means2D.size(0)  # Update N after masking
-
-    # color_rgb = build_color(means3D=means, shs=colors, c2w=viewmat, active_sh_degree=3)
-    color_rgb = colors
-    # return color_rgb
-
-    # with torch.no_grad():
-    res = render(
-        means2D=means2D,
-        cov2D=cov2D,
-        radii=radius,
-        color=color_rgb,
-        opacity=opacities,
-        depths = means_cam[:,2],
-        W=width,
-        H=height,
-        tile_size=tile_size
-    )
-    return res['render']
-
 def rasterize_gaussians_debug(
         means, 
         quats, 
@@ -796,7 +652,7 @@ def rasterize_gaussians_debug(
     # return color_rgb
 
     # with torch.no_grad():
-    res = render_mask(
+    in_mask, min_h, min_w = render_mask(
         means2D=means2D,
         cov2D=cov2D,
         radii=radius,
@@ -807,7 +663,7 @@ def rasterize_gaussians_debug(
         H=height,
         tile_size=tile_size
     )
-    return res, means, means2D, viewmat
+    return in_mask, min_h, min_w, means, means_cam, means2D, viewmat
 
 
     #==========================================================================================

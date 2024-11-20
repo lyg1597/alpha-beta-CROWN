@@ -8,11 +8,13 @@ import os
 import numpy as np 
 # from nerfstudio.cameras.cameras import Cameras, CameraType
 import matplotlib.pyplot as plt 
-from rasterize_model import RasterizationModel, RasterizationModel_notile
+# from rasterize_model import RasterizationModel, RasterizationModel_notile
 from gsplat import rasterization
 # import cv2 
-from test2 import rasterize_gaussians_pytorch
+from test2 import rasterize_gaussians_pytorch,rasterize_gaussians_debug
 from splat_model import SplatModel
+from scipy.spatial.transform import Rotation
+import copy 
 
 def get_viewmat(optimized_camera_to_world):
     """
@@ -71,7 +73,6 @@ if __name__ == "__main__":
     model = SplatModel(
         output_folder=output_folder,
         camera_pose = camera_pose,
-        checkpoint="step-000089999.ckpt",
         width=width,
         height=height,
         fx = f,
@@ -128,7 +129,7 @@ if __name__ == "__main__":
     # plt.show()
 
     with torch.no_grad():
-        res = rasterize_gaussians_pytorch(
+        in_mask, min_h, min_w, means, means_cam, meas2d, viewmat = rasterize_gaussians_debug(
             model.means, 
             model.quats/ model.quats.norm(dim=-1, keepdim=True),
             torch.exp(model.scales),
@@ -139,10 +140,84 @@ if __name__ == "__main__":
             model.width,
             model.height
         )
-    print(res.shape)
-    res = res.detach().cpu().numpy()
-    plt.imshow(res)
+    # print(res.shape)
+    # res = res.detach().cpu().numpy()
+    # plt.imshow(res)
+    # plt.show()
+
+    means_cam = means_cam.detach().cpu().numpy()
+    means = means.detach().cpu().numpy()
+    in_mask = in_mask.detach().cpu().numpy()
+    means_cam = means_cam[in_mask]
+    means = means[in_mask]
+    viewmat = viewmat.detach().cpu().numpy()
+
+    print(">>>>>>", means.shape[0])
+
+    fig = plt.figure(0)
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(means_cam[:,0],means_cam[:,1],means_cam[:,2])
+    # ax.scatter(viewmat[0,3],viewmat[1,3],viewmat[2,3],'r')
+    ax.scatter(0,0,0,'r')
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_zlabel('z')
+
+    position = viewmat[:3,3]
+    rotation_matrix = viewmat[:3,:3]
+    camera_direction_local = np.array([0,0,1])  # Local forward
+    camera_direction_world = np.eye(3) @ camera_direction_local
+    arrow_length = 1.0  # Adjust as needed
+
+    ax.quiver(
+        0, 0, 0,  # Starting point of the arrow
+        camera_direction_world[0], camera_direction_world[1], camera_direction_world[2],  # Direction vector
+        length=arrow_length, color='red', linewidth=2, arrow_length_ratio=0.1, label='Camera Direction'
+    )
+
+    plt.figure(1)
+    plt.plot(0,0,'r*')
+    for i in range(means_cam.shape[0]):
+        plt.plot([-2,5],[means_cam[i,2],means_cam[i,2]],'g')
+    plt.plot(means_cam[:,0], means_cam[:,2], 'b.')
+    
+    order = np.argsort(means_cam[:,2])
+    # depth_sorted = means_cam[order,2]
+    min_ori = float('inf')
+    min_idx = None
+    for i in range(len(order)-1):
+        pnt_pre = means_cam[order[i],:]
+        pnt_next = means_cam[order[i+1],:]
+        pnt_pre_2d = pnt_pre[(0,2),]
+        pnt_next_2d = pnt_next[(0,2),]
+        diff = pnt_next_2d-pnt_pre_2d
+        ori = np.arctan2(diff[1], diff[0])%(np.pi*2)
+        if ori<min_ori:
+            min_ori = ori
+            min_idx = i
+
+    print(min_idx, min_ori)    
+    print(means_cam[order[150],:], means_cam[order[151],:])
+
+    tmp = Rotation.from_euler('xyz',[0,min_ori,0]).as_matrix()
+    # rot = np.eye(4)
+    # rot[:3,:3] = tmp
+    # viewmat_change = viewmat@rot
+    rotation_matrix_change = tmp@rotation_matrix
+    viewmat_change = copy.deepcopy(viewmat)
+    viewmat_change[:3,:3] = rotation_matrix_change
+    ones = np.ones((means.shape[0],1))
+    means_hom = np.concatenate([means, ones], axis=1)  # [N, 4]
+    means_cam_hom = (viewmat_change @ means_hom.T).T    # [N, 4]
+    means_cam_change = means_cam_hom[:, :3] / means_cam_hom[:, 3:4]  # [N, 3]
+    order_change = np.argsort(means_cam_change[:,2])
+    print(means_cam_change[order[150],:], means_cam_change[order[151],:])
+
+    print(np.all(order_change==order))
+    print(np.where(order_change!=order))
+
     plt.show()
+    print("aa")
 
     # with torch.no_grad():
     #     res, colors_gt, rasterizer_input = model.model.get_outputs(
@@ -162,39 +237,39 @@ if __name__ == "__main__":
     # lb, ub = model_bounded.compute_bounds(x=(my_input, ), method='backward')
     # print(lb,ub)
 
-    model = RasterizationModel_notile(
-        output_folder=output_folder,
-        camera_pose = camera_pose,
-        width=width,
-        height=height,
-        fx = f,
-        fy = f,
-        tile_size=8
-    )
-    model.to(torch.device('cuda'))
-    # my_input = torch.rand((602465, 16, 3)).to(torch.device('cuda'))
-    # my_input[:,0,:] = 0
-    tmp = res_2d[model.overall_mask]
-    print(tmp.shape)
-    with torch.no_grad():
-        res = model(tmp)
-    print(res.shape)
-    res = res.detach().cpu().numpy()
-    plt.imshow(res)
-    plt.show()
+    # model = RasterizationModel(
+    #     output_folder=output_folder,
+    #     camera_pose = camera_pose,
+    #     width=width,
+    #     height=height,
+    #     fx = f,
+    #     fy = f,
+    #     tile_size=8
+    # )
+    # model.to(torch.device('cuda'))
+    # # my_input = torch.rand((602465, 16, 3)).to(torch.device('cuda'))
+    # # my_input[:,0,:] = 0
+    # tmp = res_2d[model.overall_mask]
+    # print(tmp.shape)
+    # with torch.no_grad():
+    #     res = model(tmp)
+    # print(res.shape)
+    # res = res.detach().cpu().numpy()
+    # plt.imshow(res)
+    # plt.show()
     
-    my_input = torch.clone(res_2d[model.overall_mask])
-    print(">>>>>> Starting Bounded Module")
-    model_bounded = BoundedModule(model, my_input, device=res_2d.device)
-    print(">>>>>> Starting PerturbationLpNorm")
-    ptb = PerturbationLpNorm(norm=np.inf, eps=0.1)
-    print(">>>>>> Starting BoundedTensor")
-    my_input = BoundedTensor(my_input, ptb)
-    prediction = model_bounded(my_input)
-    lb, ub = model_bounded.compute_bounds(x=(my_input, ), method='backward')
-    print(">>>>>> Done")
-    print(lb.shape)
-    print(ub.shape)
+    # my_input = torch.clone(res_2d[model.overall_mask])
+    # print(">>>>>> Starting Bounded Module")
+    # model_bounded = BoundedModule(model, my_input, device=res_2d.device)
+    # print(">>>>>> Starting PerturbationLpNorm")
+    # ptb = PerturbationLpNorm(norm=np.inf, eps=0.1)
+    # print(">>>>>> Starting BoundedTensor")
+    # my_input = BoundedTensor(my_input, ptb)
+    # prediction = model_bounded(my_input)
+    # lb, ub = model_bounded.compute_bounds(x=(my_input, ), method='backward')
+    # print(">>>>>> Done")
+    # print(lb.shape)
+    # print(ub.shape)
 
     # res_lb = torch.matmul(model.T_alpha_unsorted, lb).reshape(model.H, model.W, -1)
     # res_ub = torch.matmul(model.T_alpha_unsorted, ub).reshape(model.H, model.W, -1)
