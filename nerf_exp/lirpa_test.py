@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from rasterize_model import RasterizationModel, RasterizationModel_notile
 from gsplat import rasterization
 # import cv2 
-from test2 import rasterize_gaussians_pytorch
+from rasterization_pytorch import rasterize_gaussians_pytorch
 from splat_model import SplatModel
 
 def get_viewmat(optimized_camera_to_world):

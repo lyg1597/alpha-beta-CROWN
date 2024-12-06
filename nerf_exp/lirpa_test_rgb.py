@@ -11,8 +11,9 @@ import matplotlib.pyplot as plt
 from rasterize_model import RasterizationModel, RasterizationModel_notile, RasterizationModelRGB_notile
 from gsplat import rasterization
 # import cv2 
-from test2 import rasterize_gaussians_pytorch, rasterize_gaussians_pytorch_rgb
+from rasterization_pytorch import rasterize_gaussians_pytorch, rasterize_gaussians_pytorch_rgb
 from splat_model import SplatModel
+from typing import List
 
 def get_viewmat(optimized_camera_to_world):
     """
@@ -30,6 +31,52 @@ def get_viewmat(optimized_camera_to_world):
     viewmat[:, :3, :3] = R_inv
     viewmat[:, :3, 3:4] = T_inv
     return viewmat
+
+def reorg_bounds(bounds, pivot):
+    pivot_val = bounds[pivot]
+    # res = [pivot_val]
+    bounds_left = []
+    bounds_right = []
+    for i in range(len(bounds)):
+        if i!=pivot:
+            val = bounds[i]
+            if val[1] <= pivot_val[0]:
+                # res = [val]+res
+                bounds_left.append(val) 
+            elif pivot_val[1] <= val[0]:
+                bounds_right.append(val)
+            elif val[0] < pivot_val[0]:
+                bounds_left.append(val)
+            else:
+                bounds_right.append(val)
+    return bounds_left, bounds_right
+
+def sort_bounds(bounds:List[List[float]]):
+    if len(bounds) == 0:
+        return bounds
+    elif len(bounds) == 1:
+        return bounds
+    else:
+        pivot = int(len(bounds)/2)
+        bounds_left, bounds_right = reorg_bounds(bounds, pivot)
+        sort_left = sort_bounds(bounds_left)
+        sort_right = sort_bounds(bounds_right)
+        return sort_left + [bounds[pivot]] + sort_right
+
+def get_set_order(sorted_bounds):
+    res_list = []
+    for i in range(len(sorted_bounds)):
+        bins = []
+        ref_bound = sorted_bounds[i]
+        for j in range(len(sorted_bounds)):
+            bound = sorted_bounds[j]
+            if ref_bound[0]<=bound[1]<=ref_bound[1] or \
+                ref_bound[0]<=bound[0]<=ref_bound[1] or \
+                bound[0]<=ref_bound[0]<=bound[1] or \
+                bound[0]<=ref_bound[1]<=bound[1]:
+                bins.append(bound[2])
+        res_list.append(bins)
+    return res_list
 
 if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.realpath(__file__))
@@ -65,9 +112,9 @@ if __name__ == "__main__":
 
     fn = "frames_00775_gs.png"
 
-    width=80
-    height=60
-    f = 480.0
+    width=16
+    height=16
+    f = 1200.0
 
     model = SplatModel(
         output_folder=output_folder,
@@ -130,23 +177,23 @@ if __name__ == "__main__":
     # plt.imshow(rendered)
     # plt.show()
 
-    # with torch.no_grad():
-    #     res = rasterize_gaussians_pytorch_rgb(
-    #         model.means, 
-    #         model.quats/ model.quats.norm(dim=-1, keepdim=True),
-    #         torch.exp(model.scales),
-    #         torch.sigmoid(model.opacities).squeeze(-1),
-    #         res_2d,
-    #         view_mats, 
-    #         Ks,
-    #         model.width,
-    #         model.height
-    #     )
-    # print(res.shape)
-    # res = res[:,...,:3]
-    # res = res.detach().cpu().numpy()
-    # plt.imshow(res)
-    # plt.show()
+    with torch.no_grad():
+        res = rasterize_gaussians_pytorch_rgb(
+            model.means, 
+            model.quats/ model.quats.norm(dim=-1, keepdim=True),
+            torch.exp(model.scales),
+            torch.sigmoid(model.opacities).squeeze(-1),
+            res_2d,
+            view_mats, 
+            Ks,
+            model.width,
+            model.height
+        )
+    print(res.shape)
+    res = res[:,...,:3]
+    res = res.detach().cpu().numpy()
+    plt.imshow(res)
+    plt.show()
 
     # # with torch.no_grad():
     # #     res, colors_gt, rasterizer_input = model.model.get_outputs(
@@ -176,36 +223,56 @@ if __name__ == "__main__":
         fy = f,
         tile_size=8
     )
-    model.to(torch.device('cuda'))
-    # my_input = torch.rand((602465, 16, 3)).to(torch.device('cuda'))
-    # my_input[:,0,:] = 0
-    tmp = res_2d[model.overall_mask]
-    print(tmp.shape)
-    with torch.no_grad():
-        res = model(tmp)
-    print(res.shape)
+
+    model.strip_gaussians(
+        eps = torch.FloatTensor([10, 10, 10, 0.0001, 0.0001, 0.0001]),
+        near_plane = 0.001
+    )
+    print(model.means.shape)
+    # model.to(torch.device('cuda'))
+    # # my_input = torch.rand((602465, 16, 3)).to(torch.device('cuda'))
+    # # my_input[:,0,:] = 0
+    # tmp = res_2d[model.overall_mask]
+    # print(tmp.shape)
+    # with torch.no_grad():
+    #     res = model(tmp)
+    # print(res.shape)
+    # # res = res[:,...,:3]
+    # res = res.detach().cpu().numpy()
+    # res = res.reshape((60, 80, -1))
     # res = res[:,...,:3]
-    res = res.detach().cpu().numpy()
-    res = res.reshape((60, 80, -1))
-    res = res[:,...,:3]
-    plt.imshow(res)
-    plt.show()
-    # view_mats = model.viewmat
+    # plt.imshow(res)
+    # plt.show()
+    view_mats = model.viewmat
+    with torch.no_grad():
+        res = model(view_mats)
+    print(res.shape)
     
     # my_input = torch.clone(res_2d[model.overall_mask])
     my_input = torch.clone(view_mats)
     print(">>>>>> Starting Bounded Module")
     model_bounded = BoundedModule(model, my_input, device=res_2d.device)
     print(">>>>>> Starting PerturbationLpNorm")
-    ptb = PerturbationLpNorm(norm=np.inf, eps=0.1)
+    ptb = PerturbationLpNorm(norm=np.inf, eps=0.0001)
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb)
     prediction = model_bounded(my_input)
-    lb, ub = model_bounded.compute_bounds(x=(my_input, ), method='backward')
+    lb, ub = model_bounded.compute_bounds(x=(my_input, ), method='IBP')
     print(">>>>>> Done")
     print(lb.shape)
     print(ub.shape)
 
+    lb = lb.detach().cpu().numpy()    
+    ub = ub.detach().cpu().numpy()    
+    bounds = np.vstack((lb, ub)).T
+    bounds = bounds.tolist()
+    bounds = [elem+[i] for i, elem in enumerate(bounds)]
+
+    sorted_bounds = sort_bounds(bounds)
+    # print(sorted_bounds)
+    set_order = get_set_order(sorted_bounds)
+    print(len(set_order))
+    print(set_order)
     # res_lb = torch.matmul(model.T_alpha_unsorted, lb).reshape(model.H, model.W, -1)
     # res_ub = torch.matmul(model.T_alpha_unsorted, ub).reshape(model.H, model.W, -1)
 

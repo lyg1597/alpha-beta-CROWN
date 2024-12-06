@@ -13,8 +13,10 @@ try:
     from gsplat.rendering import rasterization
 except ImportError:
     print("Please install gsplat>=1.0.0")
-    
-from test2 import rasterize_gaussians_pytorch, render, render_notile
+
+from scipy.spatial.transform import Rotation 
+
+from rasterization_pytorch import rasterize_gaussians_pytorch, render, render_notile
 from gsplat.rendering import rasterization
 @torch.no_grad()
 def get_rect(pix_coord, radii, width, height):
@@ -999,15 +1001,15 @@ class RasterizationModel_notile(torch.nn.Module):
         self.radius = radius[self.overall_mask]
         N = means2D.size(0)  # Update N after masking
         
-        means3D = means
-        c2w = viewmat
-        active_sh_degree = 3
-        camtoworlds = torch.linalg.inv(c2w)
-        rays_o = camtoworlds[:3,3]
-        rays_d = means3D - rays_o
-        rays_d = rays_d/rays_d.norm(dim=1, keepdim=True)
-        sh_coeffs = eval_sh_old(active_sh_degree, rays_d)
-        self.sh_coeffs_expanded = sh_coeffs.unsqueeze(2)  # Shape: (424029, 16, 1)
+        # means3D = means
+        # c2w = viewmat
+        # active_sh_degree = 3
+        # camtoworlds = torch.linalg.inv(c2w)
+        # rays_o = camtoworlds[:3,3]
+        # rays_d = means3D - rays_o
+        # rays_d = rays_d/rays_d.norm(dim=1, keepdim=True)
+        # sh_coeffs = eval_sh_old(active_sh_degree, rays_d)
+        # self.sh_coeffs_expanded = sh_coeffs.unsqueeze(2)  # Shape: (424029, 16, 1)
 
     @torch.no_grad()
     def prepare_render_coefficients(self):
@@ -1236,6 +1238,7 @@ class RasterizationModelRGB_notile(torch.nn.Module):
         # self.shrink_rasterization_coefficients()
 
         self.prepare_render_coefficients()
+        self.colors = None 
 
     # def shrink_rasterization_coefficients(self):
     #     pass 
@@ -1246,19 +1249,33 @@ class RasterizationModelRGB_notile(torch.nn.Module):
         device = args[0] if args else kwargs.get('device', None)
         if device is not None:
             # Move custom tensors
-            self.sh_coeffs_expanded = self.sh_coeffs_expanded.to(device)
-            self.overall_mask = self.overall_mask.to(device)
-            self.means_cam_rast = self.means_cam_rast.to(device)
-            self.cov2D_rast = self.cov2D_rast.to(device)  
-            self.means2D_rast = self.means2D_rast.to(device)
-            self.opacities_rast = self.opacities_rast.to(device)
-            self.radius = self.radius.to(device)
+            # self.sh_coeffs_expanded = self.sh_coeffs_expanded.to(device)
+            # self.overall_mask = self.overall_mask.to(device)
+            # self.means_cam_rast = self.means_cam_rast.to(device)
+            # self.cov2D_rast = self.cov2D_rast.to(device)  
+            # self.means2D_rast = self.means2D_rast.to(device)
+            # self.opacities_rast = self.opacities_rast.to(device)
+            # self.radius = self.radius.to(device)
             
             # Render coefficients
-            self.index = self.index.to(device)
-            self.T_alpha = self.T_alpha.to(device)
-            self.T_alpha_unsorted = self.T_alpha_unsorted.to(device)
+            # self.index = self.index.to(device)
+            # self.T_alpha = self.T_alpha.to(device)
+            # self.T_alpha_unsorted = self.T_alpha_unsorted.to(device)
 
+            # Move more custom tensors
+            self.means_hom = self.means_hom.to(device)
+            self.means_hom_tmp = self.means_hom_tmp.to(device)
+            self.cov_world = self.cov_world.to(device)
+            self.J = self.J.to(device)
+            self.means = self.means.to(device)
+            self.quats = self.quats.to(device)
+            self.scales = self.scales.to(device)
+            self.opacities = self.opacities.to(device)
+            self.overall_mask = self.overall_mask.to(device)
+
+            self.K = self.K.to(device)
+            self.lim_x = self.lim_x.to(device) 
+            self.lim_y = self.lim_y.to(device)
             # Update device attribute
             self.device = torch.device(device)
         return self  # Important: Return self to allow method chaining
@@ -1333,12 +1350,18 @@ class RasterizationModelRGB_notile(torch.nn.Module):
         self.model.last_size = (self.H, self.W)
         # camera.rescale_output_resolution(camera_scale_fac)  # type: ignore
 
+        # self.opacities = self.model.opacities[:100,:]
+        # self.means = self.model.means[:100,:]
+        # # base_color = self.model.base_colors
+        # self.scales = self.model.scales[:100,:]
+        # self.quats = self.model.quats[:100,:]
+
         self.opacities = self.model.opacities
         self.means = self.model.means
         # base_color = self.model.base_colors
         self.scales = self.model.scales
         self.quats = self.model.quats
-        
+
         # apply the compensation of screen space blurring to gaussians
         self.BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
         self.K = self.camera.get_intrinsics_matrices().cuda()
@@ -1355,6 +1378,145 @@ class RasterizationModelRGB_notile(torch.nn.Module):
         # else:
         #     env_params = camera.metadata['env_params']
         # env_params_repeat = env_params.repeat(means.shape[0], 1).to(self.device)
+
+    @torch.no_grad()
+    def sample_cameras(
+        self,
+        camera_to_world: torch.Tensor, 
+        eps,
+        N
+    ):
+        R = camera_to_world[0,:3,:3]
+        T = camera_to_world[0,:3,3]
+        R = R.to('cpu').numpy()
+        T = T.to('cpu').numpy()
+        roll, pitch, yaw = Rotation.from_matrix(R).as_euler('xyz')
+
+        res = np.zeros((N,1, 3, 4))
+
+        for i in range(N):
+            eps_yaw = np.random.uniform(-eps[4], eps[4])
+            eps_pitch = np.random.uniform(-eps[5], eps[5])
+            tmp_yaw = yaw+eps_yaw 
+            tmp_pitch = pitch+eps_pitch     
+            
+            res[i,0,:3,:3] = Rotation.from_euler('xyz',[roll, tmp_pitch, tmp_yaw]).as_matrix()
+            res[i,0,:3,3] = T 
+        res_camera_poses = torch.Tensor(res).to(self.device)
+        return res_camera_poses
+
+    @torch.no_grad()
+    def strip_gaussians(
+        self,
+        eps: torch.FloatTensor,
+        near_plane=0.01, 
+        far_plane=1e10, 
+        eps2d=0.3,
+        radius_clip=0.0,
+    ):
+        '''
+        Using montecarlo simulation to get a rough estimation of what gaussians
+        should be considered for the given camera pose range
+        TODO: Make this a concrete overapproximation instead of montecarlo 
+        estimation
+        '''
+
+        means = self.means 
+        quats = self.quats 
+        scales = torch.exp(self.scales)
+        width = self.width
+        height = self.height
+
+        K = self.K[0]
+
+        N = means.size(0)
+    
+        dtype = means.dtype
+
+        camera_to_world = self.camera_to_world
+        camera_poses = self.sample_cameras(camera_to_world, eps, 100)
+        overall_mask = torch.empty((camera_poses.shape[0], means.shape[0]), dtype=torch.bool).to(self.device)
+        overall_mask.fill_(True)
+        for i in range(camera_poses.shape[0]):
+            view_mats =  get_viewmat(camera_poses[i]).to(self.means.device)
+            viewmat = view_mats[0]
+            # Step 1: Transform Gaussian centers to camera space
+            ones = torch.ones(N, 1, device=self.device, dtype=dtype)
+            means_hom = torch.cat([means, ones], dim=1).to(self.device)  # [N, 4]
+            means_cam_hom = (viewmat @ means_hom.T).T    # [N, 4]
+            means_cam = means_cam_hom[:, :3] / means_cam_hom[:, 3:4]  # [N, 3]
+
+            mask = (means_cam[:,2]>near_plane) & (means_cam[:,2]<far_plane)
+            overall_mask[i,:] = overall_mask[i,:] & mask
+
+            # Step 2: Compute rotation matrices from quaternions
+            R_gaussians = quaternion_to_rotation_matrix(quats)  # [N, 3, 3]
+
+            # Step 3: Compute covariance matrices in world space
+            scales_matrix = torch.diag_embed(scales).to(self.device)  # [N, 3, 3]
+            M = R_gaussians@scales_matrix
+            cov_world = M @ M.transpose(1, 2)  # [N, 3, 3]
+
+            # Step 4: Transform covariance matrices to camera space
+            R_cam = viewmat[:3, :3]  # [3, 3]
+            R_cam_expanded = R_cam.unsqueeze(0).expand(N, 3, 3)
+            cov_cam = R_cam_expanded @ cov_world @ R_cam_expanded.transpose(1, 2)  # [N, 3, 3]
+
+            # Step 5: Project means onto the image plane
+            means_proj_hom = (K @ means_cam.T).T  # [N, 3]
+            means2D = means_proj_hom[:, :2] / means_proj_hom[:, 2:3]  # [N, 2]
+
+            # Step 6: Compute 2D covariance matrices using the Jacobian
+            fx = K[0, 0]
+            fy = K[1, 1]
+            x = means_cam[:, 0]
+            y = means_cam[:, 1]
+            z_cam = means_cam[:, 2]
+
+            tan_fovx = 0.5*width/fx 
+            tan_fovy = 0.5*height/fy 
+            lim_x = 1.3*tan_fovx 
+            lim_y = 1.3*tan_fovy
+
+            tx = z_cam*torch.min(lim_x, torch.max(-lim_x, x/z_cam))
+            ty = z_cam*torch.min(lim_y, torch.max(-lim_y, y/z_cam))
+
+            J = torch.zeros(N, 2, 3, device=self.device, dtype=dtype)
+            J[:, 0, 0] = fx / z_cam
+            J[:, 0, 2] = -fx * tx / z_cam**2
+            J[:, 1, 1] = fy / z_cam
+            J[:, 1, 2] = -fy * ty / z_cam**2
+
+            cov2D = J @ cov_cam @ J.transpose(1, 2)  # [N, 2, 2]
+            cov2D[:,0,0] = cov2D[:,0,0]+eps2d 
+            cov2D[:,1,1] = cov2D[:,1,1]+eps2d 
+            det_blur = cov2D[:,0,0]*cov2D[:,1,1]-cov2D[:,0,1]*cov2D[:,1,0]
+            det = det_blur
+
+            mask = det_blur>0
+            overall_mask[i,:] = overall_mask[i,:]&mask 
+            
+            # Step 7: Check if points are in image region 
+            # Take 3 sigma as the radius 
+            b = 0.5*(cov2D[:,0,0]+cov2D[:,1,1])
+            v1 = b+torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
+            v2 = b-torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
+            radius = torch.ceil(3*torch.sqrt(torch.max(v1, v2)))
+            
+            mask = radius>radius_clip
+            overall_mask[i,:] = overall_mask[i,:]&mask 
+
+            mask = (means2D[:,0]+radius>0) & (means2D[:,0]-radius<width) & (means2D[:,1]+radius>0) & (means2D[:,1]-radius<height)
+            overall_mask[i,:] = overall_mask[i,:]&mask 
+        overall_mask = torch.any(overall_mask, dim=0)
+        self.means = torch.nn.Parameter(self.means[overall_mask,:])
+        self.quats = torch.nn.Parameter(self.quats[overall_mask,:])
+        self.scales = torch.nn.Parameter(self.scales[overall_mask,:])
+        self.opacities = torch.nn.Parameter(self.opacities[overall_mask,:])
+        self.cov_world = self.cov_world[:, overall_mask, :, :]
+        self.J = self.J[:, overall_mask,:,:]
+        self.means_hom_tmp = self.means_hom_tmp[:,:,overall_mask]
+        self.overall_mask = overall_mask
 
     @torch.no_grad()
     def prepare_rasterization_coefficients(
@@ -1383,189 +1545,167 @@ class RasterizationModelRGB_notile(torch.nn.Module):
         
         viewmat = view_mats[0]  # [4, 4]
         K = Ks[0]              # [3, 3]
+        # self.K = Ks
 
         N = means.size(0)
+        self.N = N
     
         dtype = means.dtype
 
         # Step 1: Transform Gaussian centers to camera space
         ones = torch.ones(N, 1, device=self.device, dtype=dtype)
-        means_hom = torch.cat([means, ones], dim=1).to(self.device)  # [N, 4]
-        means_cam_hom = (viewmat @ means_hom.T).T    # [N, 4]
-        means_cam = means_cam_hom[:, :3] / means_cam_hom[:, 3:4]  # [N, 3]
+        self.means_hom = torch.cat([means, ones], dim=1).to(self.device)  # [N, 4]
+        self.means_hom = self.means_hom.unsqueeze(0)
+        self.means_hom_tmp = self.means_hom.transpose(1,2)
+        # means_cam_hom = (viewmat @ self.means_hom.T).T    # [N, 4]
+        # means_cam = means_cam_hom[:, :3] / means_cam_hom[:, 3:4]  # [N, 3]
 
-        mask = (means_cam[:,2]>near_plane) & (means_cam[:,2]<far_plane)
-        self.overall_mask = mask
-        # means = means[mask]
-        # means_cam = means_cam[mask]
-        # quats = quats[mask] 
-        # scales = scales[mask] 
-        # opacities = opacities[mask] 
-        # colors = colors[mask] 
-        # N = means_cam.size(0)  # Update N after masking
-
+        # mask = (means_cam[:,2]>near_plane) & (means_cam[:,2]<far_plane)
+        # self.overall_mask = mask
+        
         # Step 2: Compute rotation matrices from quaternions
         R_gaussians = quaternion_to_rotation_matrix(quats)  # [N, 3, 3]
 
         # Step 3: Compute covariance matrices in world space
         scales_matrix = torch.diag_embed(scales).to(self.device)  # [N, 3, 3]
         M = R_gaussians@scales_matrix
-        cov_world = M @ M.transpose(1, 2)  # [N, 3, 3]
+        self.cov_world = M @ M.transpose(1, 2)  # [N, 3, 3]
+        self.cov_world = self.cov_world.unsqueeze(0)
 
-        # Step 4: Transform covariance matrices to camera space
-        R_cam = viewmat[:3, :3]  # [3, 3]
-        R_cam_expanded = R_cam.unsqueeze(0).expand(N, 3, 3)
-        cov_cam = R_cam_expanded @ cov_world @ R_cam_expanded.transpose(1, 2)  # [N, 3, 3]
+        # # Step 4: Transform covariance matrices to camera space
+        # R_cam = viewmat[:3, :3]  # [3, 3]
+        # R_cam_expanded = R_cam.unsqueeze(0).expand(N, 3, 3)
+        # cov_cam = R_cam_expanded @ cov_world @ R_cam_expanded.transpose(1, 2)  # [N, 3, 3]
 
-        # Step 5: Project means onto the image plane
-        means_proj_hom = (K @ means_cam.T).T  # [N, 3]
-        means2D = means_proj_hom[:, :2] / means_proj_hom[:, 2:3]  # [N, 2]
+        # # Step 5: Project means onto the image plane
+        # means_proj_hom = (K @ means_cam.T).T  # [N, 3]
+        # means2D = means_proj_hom[:, :2] / means_proj_hom[:, 2:3]  # [N, 2]
 
-        # Step 6: Compute 2D covariance matrices using the Jacobian
-        fx = K[0, 0]
-        fy = K[1, 1]
-        x = means_cam[:, 0]
-        y = means_cam[:, 1]
-        z_cam = means_cam[:, 2]
+        # # Step 6: Compute 2D covariance matrices using the Jacobian
+        # fx = K[0, 0]
+        # fy = K[1, 1]
+        # x = means_cam[:, 0]
+        # y = means_cam[:, 1]
+        # z_cam = means_cam[:, 2]
 
-        tan_fovx = 0.5*width/fx 
-        tan_fovy = 0.5*height/fy 
-        lim_x = 1.3*tan_fovx 
-        lim_y = 1.3*tan_fovy
+        self.tan_fovx = 0.5*self.width/self.fx 
+        self.tan_fovy = 0.5*self.height/self.fy 
+        self.lim_x = torch.Tensor([1.3*self.tan_fovx]).to(self.device) 
+        self.lim_y = torch.Tensor([1.3*self.tan_fovy]).to(self.device)
 
-        tx = z_cam*torch.min(lim_x, torch.max(-lim_x, x/z_cam))
-        ty = z_cam*torch.min(lim_y, torch.max(-lim_y, y/z_cam))
+        # tx = z_cam*torch.min(lim_x, torch.max(-lim_x, x/z_cam))
+        # ty = z_cam*torch.min(lim_y, torch.max(-lim_y, y/z_cam))
 
-        J = torch.zeros(N, 2, 3, device=self.device, dtype=dtype)
-        J[:, 0, 0] = fx / z_cam
-        J[:, 0, 2] = -fx * tx / z_cam**2
-        J[:, 1, 1] = fy / z_cam
-        J[:, 1, 2] = -fy * ty / z_cam**2
+        self.J = torch.zeros(1, N, 2, 3, device=self.device, dtype=dtype)
+        # J[:, 0, 0] = fx / z_cam
+        # J[:, 0, 2] = -fx * tx / z_cam**2
+        # J[:, 1, 1] = fy / z_cam
+        # J[:, 1, 2] = -fy * ty / z_cam**2
 
-        cov2D = J @ cov_cam @ J.transpose(1, 2)  # [N, 2, 2]
+        # cov2D = J @ cov_cam @ J.transpose(1, 2)  # [N, 2, 2]
 
-        det_orig = cov2D[:,0,0]*cov2D[:,1,1]-cov2D[:,0,1]*cov2D[:,1,0]
-        cov2D[:,0,0] = cov2D[:,0,0]+eps2d 
-        cov2D[:,1,1] = cov2D[:,1,1]+eps2d 
-        det_blur = cov2D[:,0,0]*cov2D[:,1,1]-cov2D[:,0,1]*cov2D[:,1,0]
-        compensation = torch.sqrt(torch.max(torch.zeros((det_orig/det_blur).shape).to(det_orig.device), det_orig/det_blur))
-        det = det_blur
+        # det_orig = cov2D[:,0,0]*cov2D[:,1,1]-cov2D[:,0,1]*cov2D[:,1,0]
+        # cov2D[:,0,0] = cov2D[:,0,0]+eps2d 
+        # cov2D[:,1,1] = cov2D[:,1,1]+eps2d 
+        # det_blur = cov2D[:,0,0]*cov2D[:,1,1]-cov2D[:,0,1]*cov2D[:,1,0]
+        # compensation = torch.sqrt(torch.max(torch.zeros((det_orig/det_blur).shape).to(det_orig.device), det_orig/det_blur))
+        # det = det_blur
 
-        mask = det_blur>0
-        self.overall_mask = self.overall_mask & mask 
-        # means = means[mask]
-        # means_cam = means_cam[mask]
-        # cov2D = cov2D[mask]
-        # means2D = means2D[mask]
-        # opacities = opacities[mask]
-        # colors = colors[mask]
+        # mask = det_blur>0
+        # self.overall_mask = self.overall_mask & mask 
+        
+        # cov2D_inv = torch.linalg.inv(cov2D)
+
+        # # Step 7: Check if points are in image region 
+        # # Take 3 sigma as the radius 
+        # b = 0.5*(cov2D[:,0,0]+cov2D[:,1,1])
+        # v1 = b+torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
+        # v2 = b-torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
+        # radius = torch.ceil(3*torch.sqrt(torch.max(v1, v2)))
+        
+        # mask = radius>radius_clip
+        # self.overall_mask = self.overall_mask & mask 
+        
+        # # mask out gaussians outside the image region
+        # mask = (means2D[:,0]+radius>0) & (means2D[:,0]-radius<width) & (means2D[:,1]+radius>0) & (means2D[:,1]-radius<height)
+        # self.overall_mask = self.overall_mask & mask 
+        
+        # # # mask out opacities smaller than threshold
+        # means = means[self.overall_mask]
+        # self.means_cam_rast = means_cam[self.overall_mask]
+        # self.cov2D_rast = cov2D[self.overall_mask]
+        # self.means2D_rast = means2D[self.overall_mask]
+        # self.opacities_rast = opacities[self.overall_mask]
+        # # colors = colors[self.overall_mask]
+        # self.radius = radius[self.overall_mask]
         # N = means2D.size(0)  # Update N after masking
-
-        cov2D_inv = torch.linalg.inv(cov2D)
-
-        # Step 7: Check if points are in image region 
-        # Take 3 sigma as the radius 
-        b = 0.5*(cov2D[:,0,0]+cov2D[:,1,1])
-        v1 = b+torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
-        v2 = b-torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
-        radius = torch.ceil(3*torch.sqrt(torch.max(v1, v2)))
         
-        mask = radius>radius_clip
-        self.overall_mask = self.overall_mask & mask 
-        # means = means[mask]
-        # means_cam = means_cam[mask]
-        # cov2D = cov2D[mask]
-        # means2D = means2D[mask]
-        # opacities = opacities[mask]
-        # colors = colors[mask]
-        # radius = radius[mask]
-        # N = means2D.size(0)  # Update N after masking
-
-        # mask out gaussians outside the image region
-        mask = (means2D[:,0]+radius>0) & (means2D[:,0]-radius<width) & (means2D[:,1]+radius>0) & (means2D[:,1]-radius<height)
-        self.overall_mask = self.overall_mask & mask 
-        
-        # # mask out opacities smaller than threshold
-        # threshold, _ = torch.kthvalue(opacities.squeeze(), opacities.shape[0]-300000+1)
-        # mask = opacities>=threshold 
-        # self.overall_mask = self.overall_mask & mask.squeeze()
-        
-        means = means[self.overall_mask]
-        self.means_cam_rast = means_cam[self.overall_mask]
-        self.cov2D_rast = cov2D[self.overall_mask]
-        self.means2D_rast = means2D[self.overall_mask]
-        self.opacities_rast = opacities[self.overall_mask]
-        # colors = colors[self.overall_mask]
-        self.radius = radius[self.overall_mask]
-        N = means2D.size(0)  # Update N after masking
-        
-        means3D = means
-        c2w = viewmat
-        active_sh_degree = 3
-        camtoworlds = torch.linalg.inv(c2w)
-        rays_o = camtoworlds[:3,3]
-        rays_d = means3D - rays_o
-        rays_d = rays_d/rays_d.norm(dim=1, keepdim=True)
-        sh_coeffs = eval_sh_old(active_sh_degree, rays_d)
-        self.sh_coeffs_expanded = sh_coeffs.unsqueeze(2)  # Shape: (424029, 16, 1)
+        # means3D = means
+        # c2w = viewmat
+        # active_sh_degree = 3
+        # camtoworlds = torch.linalg.inv(c2w)
+        # rays_o = camtoworlds[:3,3]
+        # rays_d = means3D - rays_o
+        # rays_d = rays_d/rays_d.norm(dim=1, keepdim=True)
+        # sh_coeffs = eval_sh_old(active_sh_degree, rays_d)
+        # self.sh_coeffs_expanded = sh_coeffs.unsqueeze(2)  # Shape: (424029, 16, 1)
 
     @torch.no_grad()
     def prepare_render_coefficients(self):
-        means2D=self.means2D_rast
-        cov2D=self.cov2D_rast
-        radii = self.radius
-        opacity=self.opacities_rast
-        depths = self.means_cam_rast[:,2]
-        W=self.width
-        H=self.height
-        device=self.device
-        tile_size=self.tile_size
+        pass
+        # means2D=self.means2D_rast
+        # cov2D=self.cov2D_rast
+        # radii = self.radius
+        # opacity=self.opacities_rast
+        # depths = self.means_cam_rast[:,2]
+        # W=self.width
+        # H=self.height
+        # device=self.device
+        # tile_size=self.tile_size
 
-        pix_coord = torch.stack(torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy'), dim=-1).to(device)
-        # radii = get_radius(cov2D)    
-        render_color = torch.ones(*pix_coord.shape[:2], 3).to(device)
-        render_depth = torch.zeros(*pix_coord.shape[:2], 1).to(device)
-        render_alpha = torch.zeros(*pix_coord.shape[:2], 1).to(device)
+        # pix_coord = torch.stack(torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy'), dim=-1).to(device)
+        # # radii = get_radius(cov2D)    
+        # render_color = torch.ones(*pix_coord.shape[:2], 3).to(device)
+        # render_depth = torch.zeros(*pix_coord.shape[:2], 1).to(device)
+        # render_alpha = torch.zeros(*pix_coord.shape[:2], 1).to(device)
 
-        # tile_size = 64
-        # for h in range(0, H, tile_size):
-        #     for w in range(0, W, tile_size):
-        # check if the rectangle penetrate the tile
-        # over_tl = rect[0][..., 0].clip(min=w), rect[0][..., 1].clip(min=h)
-        # over_br = rect[1][..., 0].clip(max=w+tile_size-1), rect[1][..., 1].clip(max=h+tile_size-1)
-        # in_mask = (over_br[0] > over_tl[0]) & (over_br[1] > over_tl[1]) # 3D gaussian in the tile 
-        # in_mask = torch.full((rect[0].shape[0],), True, dtype=torch.bool)
+        # # tile_size = 64
+        # # for h in range(0, H, tile_size):
+        # #     for w in range(0, W, tile_size):
+        # # check if the rectangle penetrate the tile
+        # # over_tl = rect[0][..., 0].clip(min=w), rect[0][..., 1].clip(min=h)
+        # # over_br = rect[1][..., 0].clip(max=w+tile_size-1), rect[1][..., 1].clip(max=h+tile_size-1)
+        # # in_mask = (over_br[0] > over_tl[0]) & (over_br[1] > over_tl[1]) # 3D gaussian in the tile 
+        # # in_mask = torch.full((rect[0].shape[0],), True, dtype=torch.bool)
 
-        # P = in_mask.sum()
-        tile_coord = pix_coord.flatten(0,-2)
-        sorted_depths, index = torch.sort(depths)
-        sorted_means2D = means2D[index]
-        sorted_cov2D = cov2D[index] # P 2 2
-        sorted_conic = sorted_cov2D.inverse() # inverse of variance
-        sorted_opacity = opacity[index]
-        self.index = index
-        # sorted_color = color[index]
-        dx = (tile_coord[:,None,:] - sorted_means2D[None,:]) # B P 2
+        # # P = in_mask.sum()
+        # tile_coord = pix_coord.flatten(0,-2)
+        # sorted_depths, index = torch.sort(depths)
+        # sorted_means2D = means2D[index]
+        # sorted_cov2D = cov2D[index] # P 2 2
+        # sorted_conic = sorted_cov2D.inverse() # inverse of variance
+        # sorted_opacity = opacity[index]
+        # self.index = index
+        # dx = (tile_coord[:,None,:] - sorted_means2D[None,:]) # B P 2
         
-        index_unsorted = torch.empty_like(index)
-        range_tensor = torch.arange(len(index), device = index.device)
-        index_unsorted[index] = range_tensor
-        self.index_unsorted = index_unsorted
+        # index_unsorted = torch.empty_like(index)
+        # range_tensor = torch.arange(len(index), device = index.device)
+        # index_unsorted[index] = range_tensor
+        # self.index_unsorted = index_unsorted
         
-        gauss_weight = torch.exp(-0.5 * (
-            dx[:, :, 0]**2 * sorted_conic[:, 0, 0] 
-            + dx[:, :, 1]**2 * sorted_conic[:, 1, 1]
-            + dx[:,:,0]*dx[:,:,1] * sorted_conic[:, 0, 1]
-            + dx[:,:,0]*dx[:,:,1] * sorted_conic[:, 1, 0]))
+        # gauss_weight = torch.exp(-0.5 * (
+        #     dx[:, :, 0]**2 * sorted_conic[:, 0, 0] 
+        #     + dx[:, :, 1]**2 * sorted_conic[:, 1, 1]
+        #     + dx[:,:,0]*dx[:,:,1] * sorted_conic[:, 0, 1]
+        #     + dx[:,:,0]*dx[:,:,1] * sorted_conic[:, 1, 0]))
 
-        gauss_weight_unsorted = gauss_weight[:,index_unsorted]
-        alpha = (gauss_weight[..., None] * sorted_opacity[None]).clip(max=0.99) # B P 1
-        alpha_unsorted = (gauss_weight_unsorted[..., None] * opacity[None]).clip(max=0.99) # B P 1
-        T = torch.cat([torch.ones_like(alpha[:,:1]), 1-alpha[:,:-1]], dim=1).cumprod(dim=1)
-        T_unsorted = torch.cat([torch.ones_like(alpha_unsorted[:,:1]), 1-alpha_unsorted[:,:-1]], dim=1).cumprod(dim=1)
-        # acc_alpha = (alpha * T).sum(dim=1)
-        self.T_alpha = T*alpha 
-        self.T_alpha_unsorted = self.T_alpha[:,index_unsorted,:].squeeze()
+        # gauss_weight_unsorted = gauss_weight[:,index_unsorted]
+        # alpha = (gauss_weight[..., None] * sorted_opacity[None]).clip(max=0.99) # B P 1
+        # alpha_unsorted = (gauss_weight_unsorted[..., None] * opacity[None]).clip(max=0.99) # B P 1
+        # T = torch.cat([torch.ones_like(alpha[:,:1]), 1-alpha[:,:-1]], dim=1).cumprod(dim=1)
+        # T_unsorted = torch.cat([torch.ones_like(alpha_unsorted[:,:1]), 1-alpha_unsorted[:,:-1]], dim=1).cumprod(dim=1)
+        # self.T_alpha = T*alpha 
+        # self.T_alpha_unsorted = self.T_alpha[:,index_unsorted,:].squeeze()
 
     # def forward(self, x):
     #     res = self.forward_old(x)
@@ -1602,15 +1742,92 @@ class RasterizationModelRGB_notile(torch.nn.Module):
         # color_rgb = torch.nn.functional.relu(x+0.5)
         # return color_rgb
         # res2 = (self.T_alpha_unsorted*color_rgb).sum(dim=1)
-        res2 = torch.matmul(self.T_alpha_unsorted, x)
+        # res2 = torch.matmul(self.T_alpha_unsorted, x)
         # res2 = res2.reshape(self.H, self.W, -1)
         # return color_rgb
         # color_rgb_sorted = color_rgb[:,self.index]
         # color_rgb_sorted = color_rgb
         # res = (self.T_alpha*color_rgb_sorted).sum(dim=1)
         # res = res.reshape(self.H, self.W, -1)
+        means_cam_hom = torch.bmm(x, self.means_hom_tmp).transpose(1,2)    # [N, 4]
+        means_cam = means_cam_hom[:, :, :3] / means_cam_hom[:, :, 3:4]  # [N, 3]
+
+        R_cam = x[:, :3, :3]  # [1, 3, 3]
+        # First multiplication: R_cam @ self.cov_world
+        cov_temp = torch.matmul(R_cam, self.cov_world)  # Shape: [1, N, 3, 3]
+        # Second multiplication: result @ R_cam.transpose(-1, -2)
+        cov_cam = torch.matmul(cov_temp, R_cam.transpose(-1, -2))  # Shape: [1, N, 3, 3]
+
+        # Step 5: Project means onto the image plane
+        means_proj_hom = (self.K @ means_cam.transpose(1,2)).transpose(2,1)  # [N, 3]
+        means2D = means_proj_hom[:, :, :2] / means_proj_hom[:, :, 2:3]  # [N, 2]
+
+        # # Step 6: Compute 2D covariance matrices using the Jacobian
+        x = means_cam[:, :, 0]
+        y = means_cam[:, :, 1]
+        z_cam = means_cam[:, :, 2]
+
+        # tan_fovx = 0.5*self.width/self.fx 
+        # tan_fovy = 0.5*self.height/self.fy 
+        # lim_x = 1.3*tan_fovx 
+        # lim_y = 1.3*tan_fovy
+
+        tx = z_cam*torch.min(self.lim_x, torch.max(-self.lim_x, x/z_cam))
+        ty = z_cam*torch.min(self.lim_y, torch.max(-self.lim_y, y/z_cam))
+
+        J00 = self.fx / z_cam
+        J02 = -self.fx * tx / z_cam**2
+        J11 = self.fy / z_cam
+        J12 = -self.fy * ty / z_cam**2
+
+        cov2D00 = (
+            J00 * J00 * cov_cam[:,:,0, 0] +
+            J00 * J02 * cov_cam[:,:,0, 2] +
+            J02 * J00 * cov_cam[:,:,2, 0] +
+            J02 * J02 * cov_cam[:,:,2, 2]
+        )
         
-        return res2
+        # Compute C[1][1]
+        cov2D11 = (
+            J11 * J11 * cov_cam[:,:,1, 1] +
+            J11 * J12 * cov_cam[:,:,1, 2] +
+            J12 * J11 * cov_cam[:,:,2, 1] +
+            J12 * J12 * cov_cam[:,:,2, 2]
+        )
+        
+        # Compute C[0][1]
+        cov2D01 = (
+            J00 * J11 * cov_cam[:,:,0, 1] +
+            J00 * J12 * cov_cam[:,:,0, 2] +
+            J02 * J11 * cov_cam[:,:,2, 1] +
+            J02 * J12 * cov_cam[:,:,2, 2]
+        )
+        
+        # Compute C[1][0]
+        cov2D10 = (
+            J11 * J00 * cov_cam[:,:,1, 0] +
+            J11 * J12 * cov_cam[:,:,1, 2] +
+            J12 * J00 * cov_cam[:,:,2, 0] +
+            J12 * J12 * cov_cam[:,:,2, 2]
+        )
+        # cov2D = self.J @ cov_cam @ self.J.transpose(1, 2)  # [N, 2, 2]
+
+        # # # det_orig = cov2D[:,0,0]*cov2D[:,1,1]-cov2D[:,0,1]*cov2D[:,1,0]
+        # cov2D00 = cov2D00+0.3
+        # cov2D11 = cov2D11+0.3 
+        # det_blur = cov2D00*cov2D11-cov2D01*cov2D10
+        # # cov2D[:,0,0] = cov2D[:,0,0]+0.3 
+        # # cov2D[:,1,1] = cov2D[:,1,1]+0.3 
+        # # det_blur = cov2D[:,0,0]*cov2D[:,1,1]-cov2D[:,0,1]*cov2D[:,1,0]
+        # # # compensation = torch.sqrt(torch.max(torch.zeros((det_orig/det_blur).shape).to(det_orig.device), det_orig/det_blur))
+        # # det = det_blur
+
+        # b = 0.5*(cov2D[:,0,0]+cov2D[:,1,1])
+        # v1 = b+torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
+        # v2 = b-torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
+        # radius = torch.ceil(3*torch.sqrt(torch.max(v1, v2)))
+
+        return means_cam[:,:,2]
 
         # for tile_data in self.precomputed_tiles:
         #     h = tile_data['h']
