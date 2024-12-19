@@ -36,5 +36,5 @@ my_input = BoundedTensor(my_input, ptb)
 # Regular forward propagation using BoundedTensor works as usual.
 prediction = model(my_input)
 # Compute LiRPA bounds using the backward mode bound propagation (CROWN).
-lb, ub = model.compute_bounds(x=(my_input,), method="IBP")
+lb, ub = model.compute_bounds(x=(my_input,), method="ibp")
 print(lb, ub)

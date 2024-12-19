@@ -152,17 +152,25 @@ def render_notile(means2D, cov2D, radii, color, opacity, depths, W, H, device='c
     sorted_means2D = means2D[index]
     sorted_cov2D = cov2D[index] # P 2 2
     sorted_conic = sorted_cov2D.inverse() # inverse of variance
-    sorted_opacity = opacity[index]
+    sorted_opacity = opacity[index].unsqueeze(1)
     sorted_color = color[index]
     dx = (tile_coord[:,None,:] - sorted_means2D[None,:]) # B P 2
-    
+    dx_unsorted = (tile_coord[:,None,:] - means2D[None,:])
+    conic = cov2D.inverse()
+
     gauss_weight = torch.exp(-0.5 * (
         dx[:, :, 0]**2 * sorted_conic[:, 0, 0] 
         + dx[:, :, 1]**2 * sorted_conic[:, 1, 1]
         + dx[:,:,0]*dx[:,:,1] * sorted_conic[:, 0, 1]
         + dx[:,:,0]*dx[:,:,1] * sorted_conic[:, 1, 0]))
-    
+    gauss_weight_unsorted = torch.exp(-0.5 * (
+        dx_unsorted[:, :, 0]**2 * conic[:, 0, 0] 
+        + dx_unsorted[:, :, 1]**2 * conic[:, 1, 1]
+        + dx_unsorted[:,:,0]*dx_unsorted[:,:,1] * conic[:, 0, 1]
+        + dx_unsorted[:,:,0]*dx_unsorted[:,:,1] * conic[:, 1, 0]))
+
     alpha = (gauss_weight[..., None] * sorted_opacity[None]).clip(max=0.99) # B P 1
+    alpha_unsorted = (gauss_weight_unsorted[..., None] * opacity[None,:,None]).clip(max=0.99)
     T = torch.cat([torch.ones_like(alpha[:,:1]), 1-alpha[:,:-1]], dim=1).cumprod(dim=1)
     acc_alpha = (alpha * T).sum(dim=1)
     tile_color = (T * alpha * sorted_color[None]).sum(dim=1) # + (1-acc_alpha) * (1 if white_bkgd else 0)
@@ -598,7 +606,7 @@ def rasterize_gaussians_pytorch_rgb(
     cov2D[:,1,1] = cov2D[:,1,1]+eps2d 
     det_blur = cov2D[:,0,0]*cov2D[:,1,1]-cov2D[:,0,1]*cov2D[:,1,0]
     compensation = torch.sqrt(torch.max(torch.zeros((det_orig/det_blur).shape).to(det_orig.device), det_orig/det_blur))
-    opacities = opacities * compensation
+    # opacities = opacities * compensation
     det = det_blur
 
     mask = det_blur>0
@@ -659,7 +667,8 @@ def rasterize_gaussians_pytorch_rgb(
         H=height,
         tile_size=tile_size
     )
-    return res['render']
+    res['overall_mask'] = overall_mask
+    return res
 
 def rasterize_gaussians_debug(
         means, 

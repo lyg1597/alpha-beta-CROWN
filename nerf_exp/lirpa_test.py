@@ -64,9 +64,9 @@ if __name__ == "__main__":
 
     fn = "frames_00775_gs.png"
 
-    width=2560
-    height=1440
-    f = 2300.0
+    width=320
+    height=240
+    f = 1200.0
 
     model = SplatModel(
         output_folder=output_folder,
@@ -127,22 +127,22 @@ if __name__ == "__main__":
     # plt.imshow(rendered)
     # plt.show()
 
-    with torch.no_grad():
-        res = rasterize_gaussians_pytorch(
-            model.means, 
-            model.quats/ model.quats.norm(dim=-1, keepdim=True),
-            torch.exp(model.scales),
-            torch.sigmoid(model.opacities).squeeze(-1),
-            res_2d,
-            view_mats, 
-            Ks,
-            model.width,
-            model.height
-        )
-    print(res.shape)
-    res = res.detach().cpu().numpy()
-    plt.imshow(res)
-    plt.show()
+    # with torch.no_grad():
+    #     res = rasterize_gaussians_pytorch(
+    #         model.means, 
+    #         model.quats/ model.quats.norm(dim=-1, keepdim=True),
+    #         torch.exp(model.scales),
+    #         torch.sigmoid(model.opacities).squeeze(-1),
+    #         res_2d,
+    #         view_mats, 
+    #         Ks,
+    #         model.width,
+    #         model.height
+    #     )
+    # print(res.shape)
+    # res = res.detach().cpu().numpy()
+    # plt.imshow(res)
+    # plt.show()
 
     # with torch.no_grad():
     #     res, colors_gt, rasterizer_input = model.model.get_outputs(
