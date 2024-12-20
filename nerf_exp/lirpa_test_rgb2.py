@@ -58,6 +58,40 @@ def visualize_scene(means: np.ndarray, covs: np.ndarray, colors: np.ndarray, opa
         # Add the ellipsoid to the plot
         plotter.add_mesh(ellipsoid, color=color, opacity=0.5)
 
+    # Camera parameters
+    width = 1.0      # width = height
+    focal_length = 2 * width
+    z_dist = focal_length
+    half_w = width / 2
+
+    # Define the points of the camera pyramid
+    apex = (0.0, 0.0, 0.0)  # camera center (at origin)
+    p1 = (-half_w, -half_w, z_dist)
+    p2 = ( half_w, -half_w, z_dist)
+    p3 = ( half_w,  half_w, z_dist)
+    p4 = (-half_w,  half_w, z_dist)
+
+    # Combine all points into an array
+    points = np.array([apex, p1, p2, p3, p4])
+
+    # Define the faces of the pyramid
+    # PyVista’s PolyData faces format: [npts, pt0, pt1, pt2, ...]
+    # Apex is point 0, p1=1, p2=2, p3=3, p4=4
+    faces = np.hstack([
+        [3, 0, 1, 2],  # triangle apex-p1-p2
+        [3, 0, 2, 3],  # triangle apex-p2-p3
+        [3, 0, 3, 4],  # triangle apex-p3-p4
+        [3, 0, 4, 1]   # triangle apex-p4-p1
+    ])
+
+    # Create a polydata for the pyramid
+    camera_pyramid = pv.PolyData(points, faces)
+
+    # Add the pyramid to the plot
+    # You can change the color and style as you wish
+    plotter.add_mesh(camera_pyramid, color='magenta', style='wireframe', line_width=2)
+
+
     plotter.show()
 
 if __name__ == "__main__":
@@ -73,9 +107,9 @@ if __name__ == "__main__":
     # means of three gaussian
     # means = np.random.uniform([0,0,10],[5,5,15],(1,N,2))
     means = np.array([
-        [-1,0, 10.5],
+        [-1,0, 10],
         [0,0, 10.5],
-        [1,0, 10.5]
+        [1,0, 11]
     ])
     # Orientations of three gaussian
     # rpys = np.random.uniform([-np.pi/2,-np.pi/2,-np.pi/2], [np.pi/2,np.pi/2,np.pi/2], (1,N,3))
@@ -87,9 +121,9 @@ if __name__ == "__main__":
     # Scales of three gaussian, all scales between -1-0
     # scales = np.random.uniform(-1, -0.2, (1,N,3))
     scales = np.array([
-        [-0.2,-0.2,-0.2],
-        [-0.2,-0.2,-0.2],
-        [-0.2,-0.2,-0.2]
+        [-0.4,-0.2,-0.4],
+        [-0.2,-0.2,-0.4],
+        [-0.2,-0.4,-0.4]
     ])
     # Setup Opacities of three gaussian, all between 0.5-0.8 (relatively opaque)
     # opacities = np.random.uniform(0.5, 0.8, (1,N,1))
