@@ -1,7 +1,7 @@
 import torch 
 import numpy as np 
 from scipy.spatial.transform import Rotation
-from rasterize_model import RasterizationModelRGBManual_notile, DepthModel
+from simple_model import RasterizationModelRGBManual_notile, DepthModel
 import matplotlib.pyplot as plt 
 import pyvista as pv
 
@@ -76,7 +76,7 @@ if __name__ == "__main__":
         [0,0,0],
         [0,0,0]
     ])
-    quats = Rotation.from_euler('xyz', rpys).as_quat() # x,y,z,w
+    quats = Rotation.from_euler('xyz', rpys).as_quat(scalar_first=True) # w,x,y,z
     matrices = Rotation.from_euler('xyz', rpys).as_matrix()
     quats = np.expand_dims(quats, axis=0)
 
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     else:
         raise ValueError
 
-    visualize_scene(means, covs, colors, opacities)
+    # visualize_scene(means, covs, colors, opacities)
 
     # A straight up camera matrix
     camera_pose = np.array([
@@ -148,11 +148,15 @@ if __name__ == "__main__":
         width=20,
         height=20,
     )
+    print("###### Model Alpha")
 
     model_depth = DepthModel(model_alpha)
+    print("###### Model Depth")
 
     res_alpha = model_alpha(camera_pose)
+    print("###### Alpha")
     res_depth = model_depth(camera_pose)
+    print("###### Depth")
     depth_order = torch.argsort(res_depth, dim=1).squeeze()
     sorted_alpha = res_alpha[0,:,depth_order,:]
     sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
