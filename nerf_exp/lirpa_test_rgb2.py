@@ -61,14 +61,22 @@ def visualize_scene(means: np.ndarray, covs: np.ndarray, colors: np.ndarray, opa
     plotter.show()
 
 if __name__ == "__main__":
+    w = 20
+    h = 20
+    # A straight up camera matrix
+    camera_pose = torch.Tensor(np.array([[
+        [1,0,0,0],
+        [0,1,0,0],
+        [0,0,1,0],
+        [0,0,0,1]
+    ]])).to('cuda')
     # means of three gaussian
     # means = np.random.uniform([0,0,10],[5,5,15],(1,N,2))
-    means = np.array([[
-        [-1,-1, 10],
+    means = np.array([
+        [-1,0, 10.5],
         [0,0, 10.5],
-        [1,1, 11]
-    ]])
-
+        [1,0, 10.5]
+    ])
     # Orientations of three gaussian
     # rpys = np.random.uniform([-np.pi/2,-np.pi/2,-np.pi/2], [np.pi/2,np.pi/2,np.pi/2], (1,N,3))
     rpys = np.array([
@@ -76,62 +84,56 @@ if __name__ == "__main__":
         [0,0,0],
         [0,0,0]
     ])
-    quats = Rotation.from_euler('xyz', rpys).as_quat(scalar_first=True) # w,x,y,z
-    matrices = Rotation.from_euler('xyz', rpys).as_matrix()
-    quats = np.expand_dims(quats, axis=0)
-
     # Scales of three gaussian, all scales between -1-0
     # scales = np.random.uniform(-1, -0.2, (1,N,3))
-    scales = np.array([[
-        [-0.4,-0.2,-0.4],
-        [-0.2,-0.2,-0.4],
-        [-0.2,-0.4,-0.4]
-    ]])
+    scales = np.array([
+        [-0.2,-0.2,-0.2],
+        [-0.2,-0.2,-0.2],
+        [-0.2,-0.2,-0.2]
+    ])
+    # Setup Opacities of three gaussian, all between 0.5-0.8 (relatively opaque)
+    # opacities = np.random.uniform(0.5, 0.8, (1,N,1))
+    opacities = np.array([
+        [0.6],
+        [0.6],
+        [0.6]
+    ])
+    # Setup colors of three gaussian, basically r,g,b if N=3 and r,g,b,y,p,o if N=6
+    if N==3:
+        colors = torch.Tensor(np.array([
+            [1,0,0],
+            [0,1,0],
+            [0,0,1]
+        ])).to('cuda')
+    elif N==6:
+        colors = torch.Tensor(np.array([
+            [1,0,0],
+            [0,1,0],
+            [0,0,1],
+            [1,1,0],
+            [0,1,1],
+            [1,0,1]
+        ])).to('cuda')
+    else:
+        raise ValueError
+    
+    # quats = Rotation.from_euler('xyz', rpys).as_quat(scalar_first=True) # w,x,y,z
+    quats = Rotation.from_euler('xyz', rpys).as_quat() # x,y,z,w
+    quats = np.hstack((quats[:,3:4], quats[:,0:1], quats[:,1:2], quats[:,2:3]))
+    
+    matrices = Rotation.from_euler('xyz', rpys).as_matrix()
+    # quats = np.expand_dims(quats, axis=0)
+
     covs = []
-    for i in range(scales.shape[1]):
-        scale = np.exp(scales[0][i])
+    for i in range(scales.shape[0]):
+        scale = np.exp(scales[i])
         scale_matrix = np.diag(scale)
         M = matrices[i]@scale_matrix
         cov = M@M.T
         covs.append(cov)
     covs = np.array(covs)
 
-    # Setup Opacities of three gaussian, all between 0.5-0.8 (relatively opaque)
-    # opacities = np.random.uniform(0.5, 0.8, (1,N,1))
-    opacities = np.array([[
-        [0.6],
-        [0.6],
-        [0.6]
-    ]])
-
-    # Setup colors of three gaussian, basically r,g,b if N=3 and r,g,b,y,p,o if N=6
-    if N==3:
-        colors = np.expand_dims(np.array([
-            [255,0,0],
-            [0,255,0],
-            [0,0,255]
-        ]), axis=0)
-    elif N==6:
-        colors = np.expand_dims(np.array([
-            [255,0,0],
-            [0,255,0],
-            [0,0,255],
-            [255,255,0],
-            [0,255,255],
-            [255,0,255]
-        ]), axis=0)
-    else:
-        raise ValueError
-
-    # visualize_scene(means, covs, colors, opacities)
-
-    # A straight up camera matrix
-    camera_pose = np.array([
-        [1,0,0,2.5],
-        [0,1,0,2.5],
-        [0,0,1,0],
-        [0,0,0,1]
-    ])
+    visualize_scene(means, covs, colors.cpu().numpy(), opacities)
 
     data_pack = {
         'opacities': torch.FloatTensor(opacities),
@@ -141,12 +143,11 @@ if __name__ == "__main__":
     }
 
     model_alpha = RasterizationModelRGBManual_notile(
-        camera_pose=camera_pose, 
         data_pack=data_pack,
-        fx=9,
-        fy=9,
-        width=20,
-        height=20,
+        fx=w*2,
+        fy=h*2,
+        width=w,
+        height=h,
     )
     print("###### Model Alpha")
 
@@ -162,7 +163,7 @@ if __name__ == "__main__":
     sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
     sorted_color = colors[depth_order,:]
     rgb_color = (sorted_T * sorted_alpha * sorted_color[None]).sum(dim=1)
-    rgb_color = rgb_color.reshape(16, 16, -1)[:,:,:3]
+    rgb_color = rgb_color.reshape(w, h, -1)[:,:,:3]
     rgb_color = rgb_color.detach().cpu().numpy()
     plt.figure(3)
     plt.imshow(rgb_color)

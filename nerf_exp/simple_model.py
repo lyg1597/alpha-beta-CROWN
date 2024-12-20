@@ -47,7 +47,6 @@ def get_viewmat(optimized_camera_to_world):
 class RasterizationModelRGBManual_notile(torch.nn.Module):
     def __init__(
         self,
-        camera_pose,
         data_pack,
         fx=2343.0242837919386,
         fy=2343.0242837919386,
@@ -63,38 +62,6 @@ class RasterizationModelRGBManual_notile(torch.nn.Module):
         self.height = height
 
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-        self.transform = np.array([
-            [
-                1,
-                0,
-                0,
-                0
-            ],
-            [
-                0,
-                1,
-                0,
-                0
-            ],
-            [
-                0,
-                0,
-                1,
-                0
-            ]
-        ])
-
-        self.scale_factor = 1
-
-        camera_pose = self.transform@camera_pose
-        camera_pose[:3,3] *= self.scale_factor
-        camera_pose = camera_pose[:3,:]
-        cam_state = camera_pose
-
-        if cam_state.ndim == 2:
-            cam_state = np.expand_dims(cam_state, axis=0)
-
-        self.camera_to_world = torch.FloatTensor(cam_state).to(self.device)
 
         self.setup_camera(data_pack)
         self.prepare_rasterization_coefficients(
@@ -140,9 +107,9 @@ class RasterizationModelRGBManual_notile(torch.nn.Module):
         self.BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
         self.K = torch.Tensor([
             [self.fx, 0, self.width/2],
-            [self.fy, 0, self.height/2],
+            [0, self.fy, self.height/2],
             [0,0,1]
-        ])
+        ]).to(self.device)
 
     @torch.no_grad()
     def prepare_rasterization_coefficients(
@@ -156,7 +123,6 @@ class RasterizationModelRGBManual_notile(torch.nn.Module):
         ):
         self.tile_size = tile_size
 
-        view_mats =  get_viewmat(self.camera_to_world).to(self.device)
         Ks = torch.tensor([[
             [self.fx, 0, self.width/2],
             [0, self.fy, self.height/2],
@@ -170,7 +136,6 @@ class RasterizationModelRGBManual_notile(torch.nn.Module):
         width = self.width
         height = self.height
         
-        viewmat = view_mats[0]  # [4, 4]
         K = Ks[0]              # [3, 3]
 
         N = means.size(0)
