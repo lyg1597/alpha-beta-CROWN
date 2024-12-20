@@ -165,9 +165,9 @@ if __name__ == "__main__":
 
     fn = "frames_00775_gs.png"
 
-    width=320
-    height=240
-    f = 2300.0
+    width=16
+    height=16
+    f = 1200.0
 
     model = SplatModel(
         output_folder=output_folder,
