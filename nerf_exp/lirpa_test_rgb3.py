@@ -1,7 +1,7 @@
 import torch 
 import numpy as np 
 from scipy.spatial.transform import Rotation
-from simple_model import RasterizationModelRGBManual_notile, DepthModel
+from simple_model2 import RasterizationModelRGBManual_notile, DepthModel
 import matplotlib.pyplot as plt 
 import pyvista as pv
 from typing import List 
@@ -181,15 +181,15 @@ if __name__ == "__main__":
     w = 20
     h = 20
     # A straight up camera matrix
-    camera_pose = torch.Tensor(np.array([[
-        [1,0,0,0],
-        [0,1,0,0],
-        [0,0,1,0],
-        [0,0,0,1]
-    ]])).to('cuda')
     # camera_pose = torch.Tensor(np.array([[
-    #     0,0,0,0,0,0
+    #     [1,0,0,0],
+    #     [0,1,0,0],
+    #     [0,0,1,0],
+    #     [0,0,0,1]
     # ]])).to('cuda')
+    camera_pose = torch.Tensor(np.array([[
+        0,0,0,0,0,0
+    ]])).to('cuda')
     # means of three gaussian
     # means = np.random.uniform([0,0,10],[5,5,15],(1,N,2))
     means = np.array([
@@ -282,14 +282,12 @@ if __name__ == "__main__":
     sorted_alpha = res_alpha[0,:,depth_order,:]
     sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
     sorted_color = colors[depth_order,:]
-    alphac = res_alpha[0]*colors[None]
-    sorted_alphac = alphac[:,depth_order]
-    rgb_color = (sorted_T * sorted_alphac).sum(dim=1)
+    rgb_color = (sorted_T * sorted_alpha * sorted_color[None]).sum(dim=1)
     rgb_color = rgb_color.reshape(w, h, -1)[:,:,:3]
     rgb_color = rgb_color.detach().cpu().numpy()
     plt.figure(3)
     plt.imshow(rgb_color)
-    # plt.show()
+    plt.show()
 
     ##################### Compute Bounds #####################
 
@@ -298,7 +296,7 @@ if __name__ == "__main__":
     print(">>>>>> Starting Bounded Module")
     model_alpha_bounded = BoundedModule(model_alpha, my_input, device=model_alpha.device)
     print(">>>>>> Starting PerturbationLpNorm")
-    ptb = PerturbationLpNorm(norm=np.inf, eps=0.002)
+    ptb = PerturbationLpNorm(norm=np.inf, eps=0.02)
     # ptb = PerturbationLpNorm(
     #     norm=np.inf, 
     #     x_L=torch.Tensor(np.array([[
@@ -327,7 +325,7 @@ if __name__ == "__main__":
     print(">>>>>> Starting Bounded Module")
     model_depth_bounded = BoundedModule(model_depth, my_input, device=model_depth.device)
     print(">>>>>> Starting PerturbationLpNorm")
-    ptb = PerturbationLpNorm(norm=np.inf, eps=0.002)
+    ptb = PerturbationLpNorm(norm=np.inf, eps=0.02)
     # ptb = PerturbationLpNorm(
     #     norm=np.inf, 
     #     x_L=torch.Tensor(np.array([[
@@ -386,12 +384,10 @@ if __name__ == "__main__":
     res_2d = colors
     bounds_res_2d = torch.stack((res_2d, res_2d), dim=0)
     bounds_res_2d = bounds_res_2d[:,None]
-    bounds_alphac = bounds_alpha*bounds_res_2d
     set_sorted_color = apply_set_order(set_order, bounds_res_2d)
-    set_sorted_alphac = apply_set_order(set_order, bounds_alphac)
     # write_value(set_sorted_color[:,0,:,0], 'color.txt')
 
-    tile_color = (set_sorted_T*bounds_alphac).sum(dim=2)
+    tile_color = (set_sorted_T*set_sorted_alpha*set_sorted_color).sum(dim=2)
 
     tile_color_lb = tile_color[0,:,:3].reshape((w,h,-1))
     tile_color_lb = tile_color_lb.detach().cpu().numpy()

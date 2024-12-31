@@ -86,7 +86,7 @@ class RasterizationModelRGBManual_notile(torch.nn.Module):
             self.scales = self.scales.to(device)
             self.opacities = self.opacities.to(device)
             self.opacities_rast = self.opacities_rast.to(device)
-            self.overall_mask = self.overall_mask.to(device)
+            # self.overall_mask = self.overall_mask.to(device)  # Avoid error
 
             self.K = self.K.to(device)
             self.lim_x = self.lim_x.to(device) 
@@ -156,7 +156,7 @@ class RasterizationModelRGBManual_notile(torch.nn.Module):
         scales_matrix = torch.diag_embed(scales).to(self.device)  # [N, 3, 3]
         M = R_gaussians@scales_matrix
         self.cov_world = M @ M.transpose(1, 2)  # [N, 3, 3]
-        self.cov_world = self.cov_world.unsqueeze(0)
+        # self.cov_world = self.cov_world.unsqueeze(0)  # Don't need an extra dimension that brings confusions
         self.tan_fovx = 0.5*self.width/self.fx 
         self.tan_fovy = 0.5*self.height/self.fy 
         self.lim_x = torch.Tensor([1.3*self.tan_fovx]).to(self.device) 
@@ -168,17 +168,18 @@ class RasterizationModelRGBManual_notile(torch.nn.Module):
         self.tile_coord = pix_coord.flatten(0,-2)[None,:,None,:]
 
     def forward(self, x):
-        means_cam_hom = torch.bmm(x, self.means_hom_tmp).transpose(1,2)    # [N, 4]
+        means_cam_hom = torch.matmul(x, self.means_hom_tmp).transpose(1,2)    # [N, 4]
         means_cam = means_cam_hom[:, :, :3] / means_cam_hom[:, :, 3:4]  # [N, 3]
 
         R_cam = x[:, :3, :3]  # [1, 3, 3]
+        R_cam = R_cam.unsqueeze(1)  # Add an extra dimension for broadcasting
         # First multiplication: R_cam @ self.cov_world
         cov_temp = torch.matmul(R_cam, self.cov_world)  # Shape: [1, N, 3, 3]
         # Second multiplication: result @ R_cam.transpose(-1, -2)
         cov_cam = torch.matmul(cov_temp, R_cam.transpose(-1, -2))  # Shape: [1, N, 3, 3]
 
         # Step 5: Project means onto the image plane
-        means_proj_hom = (self.K @ means_cam.transpose(1,2)).transpose(2,1)  # [N, 3]
+        means_proj_hom = means_cam @ self.K.t()
         means2D = means_proj_hom[:, :, :2] / means_proj_hom[:, :, 2:3]  # [N, 2]
 
         # # Step 6: Compute 2D covariance matrices using the Jacobian
@@ -242,10 +243,10 @@ class RasterizationModelRGBManual_notile(torch.nn.Module):
         dx = self.tile_coord-means2D[:,None,:]
 
         gauss_weight_orig = torch.exp(-0.5 * (
-            dx[:,:,:,0]**2 * conic00 
-            + dx[:,:,:,1]**2 * conic11
-            + dx[:,:,:,0]*dx[:,:,:,1] * conic01
-            + dx[:,:,:,0]*dx[:,:,:,1] * conic10))
+            dx[:,:,:,0]**2 * conic00[:, None, :] 
+            + dx[:,:,:,1]**2 * conic11[:, None, :]
+            + dx[:,:,:,0]*dx[:,:,:,1] * conic01[:, None, :]
+            + dx[:,:,:,0]*dx[:,:,:,1] * conic10[:, None, :]))
         
         alpha = gauss_weight_orig[:,:,:,None]*self.opacities_rast
 
@@ -274,8 +275,12 @@ class DepthModel(torch.nn.Module):
             self.device = torch.device(device)
         return self         
 
-    def forward(self, x):
-        means_cam_hom = torch.bmm(x, self.means_hom_tmp).transpose(1,2)    # [N, 4]
+    def forward(self, x):      
+        means_cam_hom = torch.matmul(x, self.means_hom_tmp).transpose(1,2)    # [N, 4]
         means_cam = means_cam_hom[:, :, :3] / means_cam_hom[:, :, 3:4]  # [N, 3]
 
         return means_cam[:,:,2]
+    
+class RGBModel(torch.nn.Module):
+    def forward(self, x):
+        pass 
