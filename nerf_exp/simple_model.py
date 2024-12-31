@@ -253,8 +253,11 @@ class RasterizationModelRGBManual_notile(torch.nn.Module):
         # alpha_clip = torch.clip(alpha, max=0.99)
         alpha_clip = -torch.nn.functional.relu(-alpha+0.99)+0.99
 
-        return alpha_clip
+        # depth_order = torch.argsort(means_cam[:,:,2], dim=1).squeeze()
+        # sorted_alpha = alpha_clip[:,:,depth_order,:]
+        # sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:,:1]), 1-sorted_alpha[:,:,:-1]], dim=2).cumprod(dim=2)
 
+        return alpha_clip
 
 class DepthModel(torch.nn.Module):
     def __init__(

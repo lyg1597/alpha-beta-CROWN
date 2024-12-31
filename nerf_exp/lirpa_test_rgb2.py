@@ -178,7 +178,7 @@ def visualize_scene(means: np.ndarray, covs: np.ndarray, colors: np.ndarray, opa
     plotter.show()
 
 if __name__ == "__main__":
-    eps = 0.002
+    eps = 0.02
     w = 20
     h = 20
     # A straight up camera matrix
@@ -271,6 +271,7 @@ if __name__ == "__main__":
         height=h,
     )
     print("###### Model Alpha")
+    # torch.onnx.export(model_alpha,camera_pose,'output.onnx')
 
     model_depth = DepthModel(model_alpha)
     print("###### Model Depth")
@@ -299,22 +300,22 @@ if __name__ == "__main__":
     print(">>>>>> Starting Bounded Module")
     model_alpha_bounded = BoundedModule(model_alpha, my_input, device=model_alpha.device,bound_opts={'conv_mode': 'matrix'})
     print(">>>>>> Starting PerturbationLpNorm")
-    # ptb = PerturbationLpNorm(norm=np.inf, eps=0.002)
-    ptb = PerturbationLpNorm(
-        norm=np.inf, 
-        x_L=torch.Tensor(np.array([[
-            [0.9975, -0.0575, -0.0575, -0.05],
-            [-0.0500,  0.9964, -0.0575,-0.05],
-            [-0.0500, -0.0500,  0.9975,-0.05],
-            [0,0,0,1]
-        ]])).to(model_alpha.device),
-        x_U=torch.Tensor(np.array([[
-            [1.0000, 0.0575, 0.0575, 0.05],
-            [0.0500, 1.0011, 0.0575, 0.05],
-            [0.0500, 0.0500, 1.0000, 0.05],
-            [0,0,0,1]
-        ]])).to(model_alpha.device)
-    )
+    ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
+    # ptb = PerturbationLpNorm(
+    #     norm=np.inf, 
+    #     x_L=torch.Tensor(np.array([[
+    #         [0.9975, -0.0575, -0.0575, -0.05],
+    #         [-0.0500,  0.9964, -0.0575,-0.05],
+    #         [-0.0500, -0.0500,  0.9975,-0.05],
+    #         [0,0,0,1]
+    #     ]])).to(model_alpha.device),
+    #     x_U=torch.Tensor(np.array([[
+    #         [1.0000, 0.0575, 0.0575, 0.05],
+    #         [0.0500, 1.0011, 0.0575, 0.05],
+    #         [0.0500, 0.0500, 1.0000, 0.05],
+    #         [0,0,0,1]
+    #     ]])).to(model_alpha.device)
+    # )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb)
     prediction = model_alpha_bounded(my_input)
@@ -328,22 +329,22 @@ if __name__ == "__main__":
     print(">>>>>> Starting Bounded Module")
     model_depth_bounded = BoundedModule(model_depth, my_input, device=model_depth.device,bound_opts={'conv_mode': 'matrix'})
     print(">>>>>> Starting PerturbationLpNorm")
-    # ptb = PerturbationLpNorm(norm=np.inf, eps=0.002)
-    ptb = PerturbationLpNorm(
-        norm=np.inf, 
-        x_L=torch.Tensor(np.array([[
-            [0.9975, -0.0575, -0.0575, -0.05],
-            [-0.0500,  0.9964, -0.0575,-0.05],
-            [-0.0500, -0.0500,  0.9975,-0.05],
-            [0,0,0,1]
-        ]])).to(model_alpha.device),
-        x_U=torch.Tensor(np.array([[
-            [1.0000, 0.0575, 0.0575, 0.05],
-            [0.0500, 1.0011, 0.0575, 0.05],
-            [0.0500, 0.0500, 1.0000, 0.05],
-            [0,0,0,1]
-        ]])).to(model_alpha.device)
-    )
+    ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
+    # ptb = PerturbationLpNorm(
+    #     norm=np.inf, 
+    #     x_L=torch.Tensor(np.array([[
+    #         [0.9975, -0.0575, -0.0575, -0.05],
+    #         [-0.0500,  0.9964, -0.0575,-0.05],
+    #         [-0.0500, -0.0500,  0.9975,-0.05],
+    #         [0,0,0,1]
+    #     ]])).to(model_alpha.device),
+    #     x_U=torch.Tensor(np.array([[
+    #         [1.0000, 0.0575, 0.0575, 0.05],
+    #         [0.0500, 1.0011, 0.0575, 0.05],
+    #         [0.0500, 0.0500, 1.0000, 0.05],
+    #         [0,0,0,1]
+    #     ]])).to(model_alpha.device)
+    # )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb)
     prediction = model_depth_bounded(my_input)
@@ -401,17 +402,15 @@ if __name__ == "__main__":
     for i in range(1000):
         tmp_input = my_input.repeat(1,1,1)
         delta = torch.zeros((1,4,4))
-        delta[:,:3,3] = torch.rand((1,3))*eps*2-eps
-        # delta = torch.rand((1000,4,4))*0.02-0.001
+        # delta[:,:3,3] = torch.rand((1,3))*eps*2-eps
+        delta = torch.rand((1000,4,4))*eps*2-eps
         delta = delta.to(model_depth.device)
         tmp_input = tmp_input+delta 
         perturbed_depth = model_depth(tmp_input)
         lb_test = torch.min(perturbed_depth, dim=0)
         ub_test = torch.max(perturbed_depth, dim=0)    
         res_alpha = model_alpha(camera_pose)
-        print("###### Alpha")
         res_depth = model_depth(camera_pose)
-        print("###### Depth")
         depth_order = torch.argsort(res_depth, dim=1).squeeze()
         sorted_alpha = res_alpha[0,:,depth_order,:]
         sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
@@ -421,7 +420,7 @@ if __name__ == "__main__":
         rgb_color = (sorted_T * sorted_alphac).sum(dim=1)
         rgb_color = rgb_color.reshape(w, h, -1)[:,:,:3]
         rgb_color = rgb_color.detach().cpu().numpy()
-        valid_bound = np.all(rgb_color>=tile_color_lb) and np.all(rgb_color<=tile_color_lb)
+        valid_bound = np.all(rgb_color>=tile_color_lb) and np.all(rgb_color<=tile_color_ub)
         if not valid_bound:
             print("Bound Violated")
             break

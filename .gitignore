@@ -23,3 +23,5 @@ release
 *.txt
 venv/
 .vscode/
+**.png
+**.onnx
