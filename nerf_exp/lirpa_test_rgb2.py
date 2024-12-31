@@ -178,6 +178,7 @@ def visualize_scene(means: np.ndarray, covs: np.ndarray, colors: np.ndarray, opa
     plotter.show()
 
 if __name__ == "__main__":
+    eps = 0.002
     w = 20
     h = 20
     # A straight up camera matrix
@@ -298,7 +299,7 @@ if __name__ == "__main__":
     print(">>>>>> Starting Bounded Module")
     model_alpha_bounded = BoundedModule(model_alpha, my_input, device=model_alpha.device)
     print(">>>>>> Starting PerturbationLpNorm")
-    ptb = PerturbationLpNorm(norm=np.inf, eps=0.002)
+    ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     # ptb = PerturbationLpNorm(
     #     norm=np.inf, 
     #     x_L=torch.Tensor(np.array([[
@@ -327,7 +328,7 @@ if __name__ == "__main__":
     print(">>>>>> Starting Bounded Module")
     model_depth_bounded = BoundedModule(model_depth, my_input, device=model_depth.device)
     print(">>>>>> Starting PerturbationLpNorm")
-    ptb = PerturbationLpNorm(norm=np.inf, eps=0.002)
+    ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     # ptb = PerturbationLpNorm(
     #     norm=np.inf, 
     #     x_L=torch.Tensor(np.array([[
@@ -392,13 +393,41 @@ if __name__ == "__main__":
     # write_value(set_sorted_color[:,0,:,0], 'color.txt')
 
     tile_color = (set_sorted_T*bounds_alphac).sum(dim=2)
-
     tile_color_lb = tile_color[0,:,:3].reshape((w,h,-1))
     tile_color_lb = tile_color_lb.detach().cpu().numpy()
-    plt.figure(1)
-    plt.imshow(tile_color_lb)
     tile_color_ub = tile_color[1,:,:3].reshape((w,h,-1))
     tile_color_ub = tile_color_ub.detach().cpu().numpy()
+    
+    for i in range(1000):
+        tmp_input = my_input.repeat(1,1,1)
+        delta = torch.zeros((1,4,4))
+        delta[:,:3,3] = torch.rand((1,3))*eps*2-eps
+        # delta = torch.rand((1000,4,4))*0.02-0.001
+        delta = delta.to(model_depth.device)
+        tmp_input = tmp_input+delta 
+        perturbed_depth = model_depth(tmp_input)
+        lb_test = torch.min(perturbed_depth, dim=0)
+        ub_test = torch.max(perturbed_depth, dim=0)    
+        res_alpha = model_alpha(camera_pose)
+        print("###### Alpha")
+        res_depth = model_depth(camera_pose)
+        print("###### Depth")
+        depth_order = torch.argsort(res_depth, dim=1).squeeze()
+        sorted_alpha = res_alpha[0,:,depth_order,:]
+        sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
+        sorted_color = colors[depth_order,:]
+        alphac = res_alpha[0]*colors[None]
+        sorted_alphac = alphac[:,depth_order]
+        rgb_color = (sorted_T * sorted_alphac).sum(dim=1)
+        rgb_color = rgb_color.reshape(w, h, -1)[:,:,:3]
+        rgb_color = rgb_color.detach().cpu().numpy()
+        valid_bound = np.all(rgb_color>=tile_color_lb) and np.all(rgb_color<=tile_color_lb)
+        if not valid_bound:
+            print("Bound Violated")
+            break
+
+    plt.figure(1)
+    plt.imshow(tile_color_lb)
     plt.figure(2)
     plt.imshow(tile_color_ub)
     plt.show()
