@@ -297,24 +297,24 @@ if __name__ == "__main__":
     from auto_LiRPA import BoundedModule, BoundedTensor, PerturbationLpNorm
     my_input = torch.clone(camera_pose)
     print(">>>>>> Starting Bounded Module")
-    model_alpha_bounded = BoundedModule(model_alpha, my_input, device=model_alpha.device)
+    model_alpha_bounded = BoundedModule(model_alpha, my_input, device=model_alpha.device,bound_opts={'conv_mode': 'matrix'})
     print(">>>>>> Starting PerturbationLpNorm")
-    ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
-    # ptb = PerturbationLpNorm(
-    #     norm=np.inf, 
-    #     x_L=torch.Tensor(np.array([[
-    #         [0.9975, -0.0575, -0.0575, -0.05],
-    #         [-0.0500,  0.9964, -0.0575,-0.05],
-    #         [-0.0500, -0.0500,  0.9975,-0.05],
-    #         [0,0,0,1]
-    #     ]])).to(model_alpha.device),
-    #     x_U=torch.Tensor(np.array([[
-    #         [1.0000, 0.0575, 0.0575, 0.05],
-    #         [0.0500, 1.0011, 0.0575, 0.05],
-    #         [0.0500, 0.0500, 1.0000, 0.05],
-    #         [0,0,0,1]
-    #     ]])).to(model_alpha.device)
-    # )
+    # ptb = PerturbationLpNorm(norm=np.inf, eps=0.002)
+    ptb = PerturbationLpNorm(
+        norm=np.inf, 
+        x_L=torch.Tensor(np.array([[
+            [0.9975, -0.0575, -0.0575, -0.05],
+            [-0.0500,  0.9964, -0.0575,-0.05],
+            [-0.0500, -0.0500,  0.9975,-0.05],
+            [0,0,0,1]
+        ]])).to(model_alpha.device),
+        x_U=torch.Tensor(np.array([[
+            [1.0000, 0.0575, 0.0575, 0.05],
+            [0.0500, 1.0011, 0.0575, 0.05],
+            [0.0500, 0.0500, 1.0000, 0.05],
+            [0,0,0,1]
+        ]])).to(model_alpha.device)
+    )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb)
     prediction = model_alpha_bounded(my_input)
@@ -326,24 +326,24 @@ if __name__ == "__main__":
     model_depth = DepthModel(model_alpha)
     my_input = torch.clone(camera_pose)
     print(">>>>>> Starting Bounded Module")
-    model_depth_bounded = BoundedModule(model_depth, my_input, device=model_depth.device)
+    model_depth_bounded = BoundedModule(model_depth, my_input, device=model_depth.device,bound_opts={'conv_mode': 'matrix'})
     print(">>>>>> Starting PerturbationLpNorm")
-    ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
-    # ptb = PerturbationLpNorm(
-    #     norm=np.inf, 
-    #     x_L=torch.Tensor(np.array([[
-    #         [0.9975, -0.0575, -0.0575, -0.05],
-    #         [-0.0500,  0.9964, -0.0575,-0.05],
-    #         [-0.0500, -0.0500,  0.9975,-0.05],
-    #         [0,0,0,1]
-    #     ]])).to(model_alpha.device),
-    #     x_U=torch.Tensor(np.array([[
-    #         [1.0000, 0.0575, 0.0575, 0.05],
-    #         [0.0500, 1.0011, 0.0575, 0.05],
-    #         [0.0500, 0.0500, 1.0000, 0.05],
-    #         [0,0,0,1]
-    #     ]])).to(model_alpha.device)
-    # )
+    # ptb = PerturbationLpNorm(norm=np.inf, eps=0.002)
+    ptb = PerturbationLpNorm(
+        norm=np.inf, 
+        x_L=torch.Tensor(np.array([[
+            [0.9975, -0.0575, -0.0575, -0.05],
+            [-0.0500,  0.9964, -0.0575,-0.05],
+            [-0.0500, -0.0500,  0.9975,-0.05],
+            [0,0,0,1]
+        ]])).to(model_alpha.device),
+        x_U=torch.Tensor(np.array([[
+            [1.0000, 0.0575, 0.0575, 0.05],
+            [0.0500, 1.0011, 0.0575, 0.05],
+            [0.0500, 0.0500, 1.0000, 0.05],
+            [0,0,0,1]
+        ]])).to(model_alpha.device)
+    )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb)
     prediction = model_depth_bounded(my_input)
