@@ -10,6 +10,9 @@ from auto_LiRPA import BoundedModule, BoundedTensor, register_custom_op
 from auto_LiRPA.operators import Bound
 from auto_LiRPA.perturbations import PerturbationLpNorm
 from auto_LiRPA.utils import Flatten
+import numpy as np 
+from auto_LiRPA.operators.base import Interval
+from typing import List 
 
 """ Step 1: Define a `torch.autograd.Function` class to declare and implement the
 computation of the operator. """
@@ -47,7 +50,6 @@ class BoundSortArray(Bound):
     def __init__(self, attr, inputs, output_index, options):
         """ `const` is an attribute and can be obtained from the dict `attr` """
         super().__init__(attr, inputs, output_index, options)
-        self.const = attr['const']
 
     def forward(self, x, y):
         order = torch.argsort(x, dim=2)
@@ -84,9 +86,94 @@ class BoundSortArray(Bound):
         # lower = h_L + self.const
         # upper = h_U + self.const
         # return lower, upper
-        x_L, x_U = v[0]
+        lb_depth, ub_depth = v[0]
         y_L, y_U = v[1]
-        raise NotImplementedError
+
+        bounds_y = torch.cat((y_L, y_U), dim=0) 
+
+        lb_depth = lb_depth.detach().cpu().numpy().reshape((1,-1))
+        ub_depth = ub_depth.detach().cpu().numpy().reshape((1,-1))    
+        bounds_depth = np.vstack((lb_depth, ub_depth)).T
+        bounds_depth = bounds_depth.tolist()
+        bounds_depth = [elem+[i] for i, elem in enumerate(bounds_depth)]
+        sorted_bounds = self._sort_bounds(bounds_depth)
+        set_order = self._get_set_order(sorted_bounds)
+        set_sorted_val = self._apply_set_order(set_order, bounds_y)
+
+        sorted_L = set_sorted_val[0:1]
+        sorted_U = set_sorted_val[1:2]
+    
+        return Interval.make_interval(sorted_L, sorted_U)
+
+    def _sort_bounds(self, bounds:List[List[float]]):
+        if len(bounds) == 0:
+            return bounds
+        elif len(bounds) == 1:
+            return bounds
+        else:
+            pivot = int(len(bounds)/2)
+            bounds_left, bounds_right = self._reorg_bounds(bounds, pivot)
+            sort_left = self._sort_bounds(bounds_left)
+            sort_right = self._sort_bounds(bounds_right)
+            return sort_left + [bounds[pivot]] + sort_right
+
+    def _reorg_bounds(self, bounds, pivot):
+        pivot_val = bounds[pivot]
+        # res = [pivot_val]
+        bounds_left = []
+        bounds_right = []
+        for i in range(len(bounds)):
+            if i!=pivot:
+                val = bounds[i]
+                if val[1] <= pivot_val[0]:
+                    # res = [val]+res
+                    bounds_left.append(val) 
+                elif pivot_val[1] <= val[0]:
+                    bounds_right.append(val)
+                elif val[0] < pivot_val[0]:
+                    bounds_left.append(val)
+                else:
+                    bounds_right.append(val)
+        return bounds_left, bounds_right
+
+    def _get_set_order(self, sorted_bounds):
+        res_list = []
+        for i in range(len(sorted_bounds)):
+            bins = []
+            ref_bound = sorted_bounds[i]
+            for j in range(len(sorted_bounds)):
+                bound = sorted_bounds[j]
+                if ref_bound[0]<=bound[1]<=ref_bound[1] or \
+                    ref_bound[0]<=bound[0]<=ref_bound[1] or \
+                    bound[0]<=ref_bound[0]<=bound[1] or \
+                    bound[0]<=ref_bound[1]<=bound[1]:
+                    bins.append(bound[2])
+            res_list.append(bins)
+        return res_list
+
+    def _apply_set_order(self, set_order: List, bounds: torch.Tensor):
+        '''
+        set_order: List with length N
+        bounds: 2*256*N 
+        '''
+        sorted_bounds = torch.zeros(bounds.shape).to(bounds.device)
+        for i in range(len(set_order)):
+            for j in range(len(set_order[i])):
+                if j==0:
+                    sorted_bounds[:,:,i] = bounds[:,:,set_order[i][j]]
+                else:
+                    sorted_bounds[:,:,i] = self._bounds_union(sorted_bounds[:,:,i], bounds[:,:,set_order[i][j]])
+        return sorted_bounds
+
+    def _bounds_union(self, b1, b2):
+        '''
+        b1: 2*m
+        b2: 2*m
+        '''
+        b_out = torch.zeros(b1.shape)
+        b_out[0,:] = torch.min(torch.stack((b1[0,:],b2[0,:]), dim=0), dim=0).values
+        b_out[1,:] = torch.max(torch.stack((b1[1,:],b2[1,:]), dim=0), dim=0).values
+        return b_out 
 
 """ Step 4: Register the custom operator """
 register_custom_op("custom::SortArray", BoundSortArray)

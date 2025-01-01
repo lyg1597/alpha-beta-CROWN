@@ -292,6 +292,15 @@ class SortModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.sort_op = SortArray()
+        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
+    def to(self, *args, **kwargs):
+        # Move parameters and buffers
+        super(SortModel, self).to(*args, **kwargs)
+        device = args[0] if args else kwargs.get('device', None)
+        if device is not None:
+            self.device = torch.device(device)
+        return self  # Important: Return self to allow method chaining
 
     def forward(self, x, y):
         depth = x
@@ -303,6 +312,15 @@ class SortModel(torch.nn.Module):
 class RGBModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
+        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
+    def to(self, *args, **kwargs):
+        # Move parameters and buffers
+        super(RGBModel, self).to(*args, **kwargs)
+        device = args[0] if args else kwargs.get('device', None)
+        if device is not None:
+            self.device = torch.device(device)
+        return self  # Important: Return self to allow method chaining
 
     def forward(self, x, y):
         sorted_alpha = x      # 1*p*n*1 tensor: batch size; number of pixels; number of gaussians; one number

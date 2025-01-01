@@ -5,6 +5,7 @@ from simple_model3 import AlphaDepthModel, SortModel, RGBModel
 import matplotlib.pyplot as plt 
 import pyvista as pv
 from typing import List 
+from auto_LiRPA import BoundedModule, BoundedTensor, PerturbationLpNorm
 
 def reorg_bounds(bounds, pivot):
     pivot_val = bounds[pivot]
@@ -178,6 +179,7 @@ def visualize_scene(means: np.ndarray, covs: np.ndarray, colors: np.ndarray, opa
     plotter.show()
 
 if __name__ == "__main__":
+    eps = 0.01
     w = 20
     h = 20
     # A straight up camera matrix
@@ -277,32 +279,97 @@ if __name__ == "__main__":
     model_sort_alphac = SortModel()
     
     model_rgb = RGBModel()
+    print("###### Model RGB")
 
     res_alpha_depth = model_alpha_depth(camera_pose)
     res_alpha = res_alpha_depth[:,:w*h]
-    # res_alphac = res_alpha_depth[:,w*h:w*h*2]
     res_depth = res_alpha_depth[:,-1:]
+    print(">>>>>> Starting Bounded Module alpha_depth")
+    model_alpha_depth_bounded = BoundedModule(
+        model_alpha_depth, 
+        camera_pose, 
+        device=model_alpha_depth.device,
+        bound_opts={'conv_mode': 'matrix'}
+    )
+    print(">>>>>> Starting PerturbationLpNorm")
+    ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
+    print(">>>>>> Starting BoundedTensor")
+    my_input = BoundedTensor(camera_pose, ptb)
+    prediction = model_alpha_depth_bounded(my_input)
+    model_alpha_depth_bounded.visualize('alpha_depth')
+    print(">>>>>> Starting Compute Bound")
+    lb_alpha_depth, ub_alpha_depth = model_alpha_depth_bounded.compute_bounds(x=(my_input, ), method='backward')
+    bounds_alpha_depth = torch.cat((lb_alpha_depth, ub_alpha_depth), dim=0)
+    lb_alpha, ub_alpha = lb_alpha_depth[:,:w*h], ub_alpha_depth[:,:w*h]
+    lb_depth, ub_depth = lb_alpha_depth[:,-1:], ub_alpha_depth[:,-1:]
     
     sorted_alpha = model_sort_alpha(res_depth, res_alpha)
-    alphac = colors[None,None]*res_alpha
-    # depth_copy = res_depth.repeat(1,1,1,3)
-    # sorted_alphac = model_sort_alphac(torch.cat((alphac, depth_copy), dim=1))
-    sorted_alphac = model_sort_alphac(res_depth, alphac)
+    print(">>>>>> Starting Bounded Module sort_alpha")
+    model_sort_alpha_bounded = BoundedModule(
+        model_sort_alpha, 
+        (res_depth, res_alpha), 
+        device=model_sort_alpha.device,
+        bound_opts={'conv_mode': 'matrix'}
+    )
+    model_sort_alpha_bounded.visualize('sort_alpha')
+    print(">>>>>> Starting PerturbationLpNorm")
+    ptb_depth = PerturbationLpNorm(norm=np.inf, x_L=lb_depth, x_U=ub_depth)
+    ptb_alpha = PerturbationLpNorm(norm=np.inf, x_L=lb_alpha, x_U=ub_alpha)
+    print(">>>>>> Starting BoundedTensor")
+    inp1 = BoundedTensor(res_depth, ptb_depth)
+    inp2 = BoundedTensor(res_alpha, ptb_alpha)
+    lb_sorted_alpha, ub_sorted_alpha = model_sort_alpha_bounded.compute_bounds(x=(inp1, inp2), method='ibp')
+
+    res_alphac = colors[None,None]*res_alpha
+    sorted_alphac = model_sort_alphac(res_depth, res_alphac)
+    lb_alphac = colors[None,None]*lb_alpha
+    ub_alphac = colors[None,None]*ub_alpha
+    print(">>>>>> Starting Bounded Module sort_alphac")
+    model_sort_alphac_bounded = BoundedModule(
+        model_sort_alpha, 
+        (res_depth, res_alphac), 
+        device=model_sort_alphac.device,
+        bound_opts={'conv_mode': 'matrix'}
+    )
+    model_sort_alphac_bounded.visualize('sort_alphac')
+    print(">>>>>> Starting PerturbationLpNorm")
+    ptb_depth = PerturbationLpNorm(norm=np.inf, x_L=lb_depth, x_U=ub_depth)
+    ptb_alphac = PerturbationLpNorm(norm=np.inf, x_L=lb_alphac, x_U=ub_alphac)
+    print(">>>>>> Starting BoundedTensor")
+    inp1 = BoundedTensor(res_depth, ptb_depth)
+    inp2 = BoundedTensor(res_alphac, ptb_alphac)
+    lb_sorted_alphac, ub_sorted_alphac = model_sort_alphac_bounded.compute_bounds(x=(inp1, inp2), method='ibp')
 
     rgb_color = model_rgb(sorted_alpha, sorted_alphac)
+    print(">>>>>> Starting Bounded Module rgb")
+    model_rgb_bounded = BoundedModule(
+        model_rgb, 
+        (sorted_alpha, sorted_alphac), 
+        device=model_rgb.device,
+        bound_opts={'conv_mode': 'matrix'}
+    )
+    model_rgb_bounded.visualize('rgb')
+    print(">>>>>> Starting PerturbationLpNorm")
+    ptb_sorted_alpha = PerturbationLpNorm(norm=np.inf, x_L=lb_sorted_alpha, x_U=ub_sorted_alpha)
+    ptb_sorted_alphac = PerturbationLpNorm(norm=np.inf, x_L=lb_sorted_alphac, x_U=ub_sorted_alphac)
+    print(">>>>>> Starting BoundedTensor")
+    inp1 = BoundedTensor(sorted_alpha, ptb_depth)
+    inp2 = BoundedTensor(res_alphac, ptb_alphac)
+    lb_rgb_color, ub_rgb_color = model_rgb_bounded.compute_bounds(x=(inp1, inp2), method='crown')
 
-    # print("###### Alpha")
-    # res_depth = model_depth(camera_pose)
-    # print("###### Depth")
-    # depth_order = torch.argsort(res_depth, dim=1).squeeze()
-    # sorted_alpha = res_alpha[0,:,depth_order,:]
-    # sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
-    # sorted_color = colors[depth_order,:]
-    # rgb_color = (sorted_T * sorted_alpha * sorted_color[None]).sum(dim=1)
     rgb_color = rgb_color.reshape(w, h, -1)[:,:,:3]
     rgb_color = rgb_color.detach().cpu().numpy()
     plt.figure(3)
     plt.imshow(rgb_color)
+    lb_rgb_color = lb_rgb_color.reshape(w,h,-1)[:,:,:3]
+    lb_rgb_color = lb_rgb_color.detach().cpu().numpy()
+    plt.figure(0)
+    plt.imshow(lb_rgb_color)
+    ub_rgb_color = ub_rgb_color.reshape(w,h,-1)[:,:,:3]
+    ub_rgb_color = ub_rgb_color.detach().cpu().numpy()
+    plt.figure(1)
+    plt.imshow(ub_rgb_color)
+    
     plt.show()
 
     # ##################### Compute Bounds #####################
