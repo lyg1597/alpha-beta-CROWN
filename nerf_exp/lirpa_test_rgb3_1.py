@@ -5,6 +5,9 @@ from simple_model2 import RasterizationModelRGBManual_notile, DepthModel
 import matplotlib.pyplot as plt 
 import pyvista as pv
 from typing import List, Dict
+from collections import defaultdict
+import itertools
+from auto_LiRPA import BoundedModule, BoundedTensor, PerturbationLpNorm
 
 def reorg_bounds(bounds, pivot):
     pivot_val = bounds[pivot]
@@ -51,6 +54,47 @@ def get_set_order(sorted_bounds):
                 bins.append(bound[2])
         res_list.append(bins)
     return res_list
+
+def get_elem_before_linear(ptb: PerturbationLpNorm, A: defaultdict, model:BoundedModule):
+    x_L = ptb.x_L
+    x_U = ptb.x_U
+    x_bounds = torch.cat((x_L, x_U), dim=0)
+    x_bounds_list = x_bounds.transpose(0,1).detach().cpu().numpy().tolist()
+    all_combins = list(itertools.product(*x_bounds_list))
+
+    lA: torch.Tensor = A[model.output_name[0]][model.input_name[0]]['lA']
+    uA: torch.Tensor = A[model.output_name[0]][model.input_name[0]]['uA']
+    lbias: torch.Tensor = A[model.output_name[0]][model.input_name[0]]['lbias']
+    ubias: torch.Tensor = A[model.output_name[0]][model.input_name[0]]['ubias']
+    
+    concrete_bound = {}
+    possible_bound = {}
+    for i in range(lA.shape[1]):
+        concrete_bound[i] = []
+        possible_bound[i] = []
+        for j in range(lA.shape[1]):
+            if i==j:
+                continue
+            smaller_than = False 
+            greater_than = False 
+            for k in range(len(all_combins)):
+                x = torch.Tensor(all_combins[k]).to(lA.device)
+                fxl = lA[0,j,:]@x+lbias[0,j]
+                fxu = uA[0,j,:]@x+ubias[0,j]
+                fxl_ref = lA[0,i,:]@x+lbias[0,i]
+                fxu_ref = uA[0,i,:]@x+ubias[0,i]
+                if fxu<=fxl_ref:
+                    smaller_than = smaller_than or True 
+                elif fxl>=fxu_ref:
+                    greater_than = greater_than or True
+            if smaller_than and not greater_than:
+                concrete_bound[i].append(j)
+                possible_bound[i].append(j)
+            elif smaller_than and greater_than:
+                possible_bound[i].append(j)
+            elif not smaller_than and not greater_than:
+                possible_bound[i].append(j)
+    return concrete_bound, possible_bound
 
 def get_elem_before(sorted_bounds):
     concrete_bound = {}
@@ -324,8 +368,6 @@ if __name__ == "__main__":
     plt.show()
 
     ##################### Compute Bounds #####################
-
-    from auto_LiRPA import BoundedModule, BoundedTensor, PerturbationLpNorm
     my_input = torch.clone(camera_pose)
     print(">>>>>> Starting Bounded Module")
     model_alpha_bounded = BoundedModule(model_alpha, my_input, device=model_alpha.device, bound_opts={'conv_mode': 'matrix'})
@@ -336,27 +378,15 @@ if __name__ == "__main__":
         x_L=torch.Tensor([[-eps,-eps,-eps,-0.25,-0.25,-0.25]]).to(model_alpha.device),
         x_U=torch.Tensor([[eps,eps,eps,0.25,0.25,0.25]]).to(model_alpha.device),
     )
-    # ptb = PerturbationLpNorm(
-    #     norm=np.inf, 
-    #     x_L=torch.Tensor(np.array([[
-    #         [0.9975, -0.0575, -0.0575, -0.05],
-    #         [-0.0500,  0.9964, -0.0575,-0.05],
-    #         [-0.0500, -0.0500,  0.9975,-0.05],
-    #         [0,0,0,1]
-    #     ]])).to(model_alpha.device),
-    #     x_U=torch.Tensor(np.array([[
-    #         [1.0000, 0.0575, 0.0575, 0.05],
-    #         [0.0500, 1.0011, 0.0575, 0.05],
-    #         [0.0500, 0.0500, 1.0000, 0.05],
-    #         [0,0,0,1]
-    #     ]])).to(model_alpha.device)
-    # )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb)
     prediction = model_alpha_bounded(my_input)
     # model_alpha_bounded.visualize('a')
     print(">>>>>> Starting Compute Bound")
-    lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='backward')
+    required_A = defaultdict(set)
+    required_A[model_alpha_bounded.output_name[0]].add(model_alpha_bounded.input_name[0])
+    lb_alpha, ub_alpha, A_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='backward', return_A=True, needed_A_dict=required_A)
+    # lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='backward')
     lb_alpha = torch.clip(lb_alpha, min=0)
     ub_alpha = torch.clip(ub_alpha, max=0.99)
     bounds_alpha = torch.cat((lb_alpha, ub_alpha), dim=0)
@@ -375,7 +405,10 @@ if __name__ == "__main__":
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb)
     prediction = model_depth_bounded(my_input)
-    lb_depth, ub_depth = model_depth_bounded.compute_bounds(x=(my_input, ), method='backward')
+    required_A = defaultdict(set)
+    required_A[model_depth_bounded.output_name[0]].add(model_depth_bounded.input_name[0])
+    lb_depth, ub_depth, A_depth = model_depth_bounded.compute_bounds(x=(my_input, ), method='backward', return_A=True, needed_A_dict=required_A)
+    # lb_depth, ub_depth = model_depth_bounded.compute_bounds(x=(my_input, ), method='backward')
 
     lb_depth = lb_depth.detach().cpu().numpy()    
     ub_depth = ub_depth.detach().cpu().numpy()    
@@ -385,7 +418,7 @@ if __name__ == "__main__":
     sorted_bounds = sort_bounds(bounds_depth)
 
     concrete_before, possible_before = get_elem_before(bounds_depth)
-    # concrete_before, possible_before = get_elem_before_linear(bounds_depth)
+    concrete_before, possible_before = get_elem_before_linear(ptb, A_depth,model_depth_bounded)
     print(concrete_before, possible_before)
     res_T = computeT(concrete_before, possible_before, bounds_alpha)
     
