@@ -31,8 +31,8 @@ class SortArrayOp(torch.autograd.Function):
     def forward(ctx, x, y):
         """ In this function, implement the computation for the operator, i.e.,
         f(x) = x + c in this case. """
-        order = torch.argsort(x, dim=2)
-        sorted_y = y[:,:,order.squeeze(),:]
+        order = torch.argsort(x, dim=2).squeeze()
+        sorted_y = y[:,:,order,:]
         return sorted_y
 
 """ Step 2: Define a `torch.nn.Module` class to declare a module using the defined

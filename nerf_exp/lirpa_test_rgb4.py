@@ -179,7 +179,7 @@ def visualize_scene(means: np.ndarray, covs: np.ndarray, colors: np.ndarray, opa
     plotter.show()
 
 if __name__ == "__main__":
-    eps = 0.01
+    eps = 0.05
     w = 20
     h = 20
     # A straight up camera matrix

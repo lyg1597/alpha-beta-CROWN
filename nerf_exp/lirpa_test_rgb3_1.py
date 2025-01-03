@@ -4,7 +4,7 @@ from scipy.spatial.transform import Rotation
 from simple_model2 import RasterizationModelRGBManual_notile, DepthModel
 import matplotlib.pyplot as plt 
 import pyvista as pv
-from typing import List 
+from typing import List, Dict
 
 def reorg_bounds(bounds, pivot):
     pivot_val = bounds[pivot]
@@ -52,7 +52,29 @@ def get_set_order(sorted_bounds):
         res_list.append(bins)
     return res_list
 
-
+def get_elem_before(sorted_bounds):
+    concrete_bound = {}
+    possible_bound = {}
+    for i in range(len(sorted_bounds)):
+        ref_bound = sorted_bounds[i]
+        concrete_bound[ref_bound[2]] = []
+        possible_bound[ref_bound[2]] = []
+        for j in range(len(sorted_bounds)):
+            bound = sorted_bounds[j]
+            # First check concrete bound
+            # If lower bound of ref is greater than upper bound of ref, then bound is guaranteed before ref_bound 
+            if ref_bound[0]>bound[1] and ref_bound[2]!=bound[2]:
+                # Add bound to both concrete and reference bound 
+                concrete_bound[ref_bound[2]].append(bound[2])
+                possible_bound[ref_bound[2]].append(bound[2])
+            # Check if over-lapping bound, if yes, only add to possible bound              
+            elif (ref_bound[0]<=bound[1]<=ref_bound[1] or \
+                ref_bound[0]<=bound[0]<=ref_bound[1] or \
+                bound[0]<=ref_bound[0]<=bound[1] or \
+                bound[0]<=ref_bound[1]<=bound[1]) and ref_bound[2]!=bound[2]:
+                possible_bound[ref_bound[2]].append(bound[2])
+    return concrete_bound, possible_bound
+        
 def bounds_union(b1, b2):
     '''
     b1: 2*m
@@ -62,6 +84,17 @@ def bounds_union(b1, b2):
     b_out[0,:] = torch.min(torch.stack((b1[0,:],b2[0,:]), dim=0), dim=0).values
     b_out[1,:] = torch.max(torch.stack((b1[1,:],b2[1,:]), dim=0), dim=0).values
     return b_out 
+
+def computeT(concrete_before: Dict, possible_before: Dict, bounds_alpha: torch.Tensor):
+    T = torch.ones(bounds_alpha.shape).to(bounds_alpha.device)
+    for i in range(bounds_alpha.shape[2]):
+        # Compute lb, using possible bounds, use upper bound of alpha 
+        for j in range(len(possible_before[i])):
+            T[0, :, i, :] = T[0, :, i, :]*(1-bounds_alpha[1,:,possible_before[i][j],:])
+        # Compute ub, using concrete bounds, use lower bound of alpha 
+        for j in range(len(concrete_before[i])):
+            T[1, :, i, :] = T[1, :, i, :]*(1-bounds_alpha[0,:,concrete_before[i][j],:])
+    return T 
 
 def apply_set_order(set_order: List, bounds: torch.Tensor):
     '''
@@ -126,7 +159,7 @@ def visualize_scene(means: np.ndarray, covs: np.ndarray, colors: np.ndarray, opa
 
         # Choose your "confidence interval" (scaling factor):
         # For example, 1-sigma ellipsoid:
-        scales = np.sqrt(eigvals)  # Semi-axis lengths
+        scales = np.sqrt(eigvals)*3  # Semi-axis lengths
 
         # Create a unit sphere
         sphere = pv.Sphere(radius=1.0, center=(0,0,0), phi_resolution=30, theta_resolution=30)
@@ -300,8 +333,8 @@ if __name__ == "__main__":
     # ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     ptb = PerturbationLpNorm(
         norm=np.inf, 
-        x_L=torch.Tensor([[-eps,-eps,-eps,-eps,-eps,-eps]]).to(model_alpha.device),
-        x_U=torch.Tensor([[eps,eps,eps,eps,eps,eps]]).to(model_alpha.device),
+        x_L=torch.Tensor([[-eps,-eps,-eps,-0.25,-0.25,-0.25]]).to(model_alpha.device),
+        x_U=torch.Tensor([[eps,eps,eps,0.25,0.25,0.25]]).to(model_alpha.device),
     )
     # ptb = PerturbationLpNorm(
     #     norm=np.inf, 
@@ -324,6 +357,8 @@ if __name__ == "__main__":
     # model_alpha_bounded.visualize('a')
     print(">>>>>> Starting Compute Bound")
     lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='backward')
+    lb_alpha = torch.clip(lb_alpha, min=0)
+    ub_alpha = torch.clip(ub_alpha, max=0.99)
     bounds_alpha = torch.cat((lb_alpha, ub_alpha), dim=0)
     
     model_depth = DepthModel(model_alpha)
@@ -334,8 +369,8 @@ if __name__ == "__main__":
     # ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     ptb = PerturbationLpNorm(
         norm=np.inf, 
-        x_L=torch.Tensor([[-eps,-eps,-eps,-eps,-eps,-eps]]).to(model_depth.device),
-        x_U=torch.Tensor([[eps,eps,eps,eps,eps,eps]]).to(model_depth.device),
+        x_L=torch.Tensor([[-eps,-eps,-eps,-0.25,-0.25,-0.25]]).to(model_depth.device),
+        x_U=torch.Tensor([[eps,eps,eps,0.25,0.25,0.25]]).to(model_depth.device),
     )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb)
@@ -349,43 +384,47 @@ if __name__ == "__main__":
     bounds_depth = [elem+[i] for i, elem in enumerate(bounds_depth)]
     sorted_bounds = sort_bounds(bounds_depth)
 
-    # print(sorted_bounds)
-    set_order = get_set_order(sorted_bounds)
-    print(set_order)
-    # Check set order
-    depth_order_array = depth_order.detach().cpu().numpy()
-    for i in range(len(set_order)):
-        val = depth_order_array[i]
-        if val in set_order[i]:
-            continue
-        else:
-            print(f"Set order violated: {i}, {val}, {set_order[i]}")
-    print(len(set_order))
-    print(set_order)
-    
-    set_sorted_alpha = apply_set_order(set_order, bounds_alpha)
-    set_sorted_T = compute_sortedT(set_sorted_alpha)
+    concrete_before, possible_before = get_elem_before(bounds_depth)
+    # concrete_before, possible_before = get_elem_before_linear(bounds_depth)
+    print(concrete_before, possible_before)
+    res_T = computeT(concrete_before, possible_before, bounds_alpha)
     
     res_2d = colors
     bounds_res_2d = torch.stack((res_2d, res_2d), dim=0)
     bounds_res_2d = bounds_res_2d[:,None]
-    bounds_alphac = bounds_alpha*bounds_res_2d
-    set_sorted_color = apply_set_order(set_order, bounds_res_2d)
-    set_sorted_alphac = apply_set_order(set_order, bounds_alphac)
+    tile_color = (res_T*bounds_alpha*bounds_res_2d).sum(dim=2)
     
-    tile_color = (set_sorted_T*bounds_alphac).sum(dim=2)
+    set_order = get_set_order(sorted_bounds)
+    set_sorted_alpha = apply_set_order(set_order, bounds_alpha)
+    set_sorted_T = compute_sortedT(set_sorted_alpha)
+    bounds_res_2d = torch.stack((colors, colors), dim=0)
+    bounds_res_2d = bounds_res_2d[:,None]
+    bounds_alphac = bounds_alpha*bounds_res_2d
+    set_sorted_alphac = apply_set_order(set_order, bounds_alphac)
+    tile_color_old = (set_sorted_T*bounds_alphac).sum(dim=2)
+    diff = torch.abs(tile_color-tile_color_old).sum(dim=2)
+
     tile_color_lb = tile_color[0,:,:3].reshape((w,h,-1))
     tile_color_lb = tile_color_lb.detach().cpu().numpy()
     tile_color_ub = tile_color[1,:,:3].reshape((w,h,-1))
     tile_color_ub = tile_color_ub.detach().cpu().numpy()
-    
+    diff_lb = diff[0,:].reshape((w,h,-1))
+    diff_lb = diff_lb.detach().cpu().numpy()
+    diff_ub = diff[1,:].reshape((w,h,-1))
+    diff_ub = diff_ub.detach().cpu().numpy()
+
     empirical_lb = np.zeros(tile_color_lb.shape)+1e10
     empirical_ub = np.zeros(tile_color_lb.shape)
+    empirical_alpha_lb = np.zeros(lb_alpha.shape)+1e10
+    empirical_alpha_ub = np.zeros(ub_alpha.shape)
+    lb_alpha = lb_alpha.detach().cpu().numpy()
+    ub_alpha = ub_alpha.detach().cpu().numpy()
     for i in range(1000):
         tmp_input = my_input.repeat(1,1)
         delta = torch.zeros((1,6))
         # delta[:,:3,3] = torch.rand((1,3))*eps*2-eps
-        delta = torch.rand((1,6))*eps*2-eps
+        delta[:,:3] = torch.rand((1,3))*eps*2-eps
+        delta[:,3:] = torch.rand((1,3))*0.25*2-0.25
         delta = delta.to(model_depth.device)
         tmp_input = tmp_input+delta 
         res_alpha = model_alpha(tmp_input)
@@ -397,6 +436,9 @@ if __name__ == "__main__":
         alphac = res_alpha[0]*colors[None]
         sorted_alphac = alphac[:,depth_order]
         rgb_color = (sorted_T * sorted_alphac).sum(dim=1)
+        res_alpha = res_alpha.detach().cpu().numpy()
+        empirical_alpha_lb = np.minimum(empirical_alpha_lb, res_alpha)
+        empirical_alpha_ub = np.maximum(empirical_alpha_ub, res_alpha)
         rgb_color = rgb_color.reshape(w, h, -1)[:,:,:3]
         rgb_color = rgb_color.detach().cpu().numpy()
         empirical_lb = np.minimum(empirical_lb, rgb_color)
@@ -405,6 +447,9 @@ if __name__ == "__main__":
         if not valid_bound:
             print("Bound Violated")
             break
+
+    diff_compemp_ub = (ub_alpha-empirical_alpha_ub).reshape(w,h,-1)
+    diff_compemp_lb = (empirical_alpha_lb-lb_alpha).reshape(w,h,-1)
 
     plt.figure(1)
     plt.imshow(tile_color_lb)
@@ -418,4 +463,16 @@ if __name__ == "__main__":
     plt.figure(4)
     plt.imshow(empirical_ub)
     plt.title("empirical ub")
+    plt.figure(5)
+    plt.imshow(diff_lb)
+    plt.title("diff_lb")
+    plt.figure(6)
+    plt.imshow(diff_ub)
+    plt.title("diff_ub")
+    plt.figure(7)
+    plt.imshow(diff_compemp_lb)
+    plt.title('diff_comp_emp_lb')
+    plt.figure(8)
+    plt.imshow(diff_compemp_ub)
+    plt.title('diff_comp_emp_ub')
     plt.show()
