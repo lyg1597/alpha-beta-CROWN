@@ -67,7 +67,10 @@ class InverseModelLb(torch.nn.Module):
         return self  # Important: Return self to allow method chaining
 
     def forward(self, x):
-        res = self.A0_inv - self.A0_inv@(x-self.A0)@self.A0_inv 
+        res = self.A0_inv \
+            - self.A0_inv@(x-self.A0)@self.A0_inv
+            # + self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv\
+            # - self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv
         return res 
 
 class InverseModelUb(torch.nn.Module):
@@ -93,7 +96,11 @@ class InverseModelUb(torch.nn.Module):
         return self  # Important: Return self to allow method chaining
 
     def forward(self, x):
-        res = self.A0_inv - self.A0_inv@(x-self.A0)@self.A0_inv+self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv 
+        res = self.A0_inv \
+            - self.A0_inv@(x-self.A0)@self.A0_inv\
+            + self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv
+            # - self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv\
+            # + self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv
         return res 
 
 class AlphaModel(torch.nn.Module):
