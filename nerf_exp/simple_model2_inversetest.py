@@ -43,7 +43,59 @@ def get_viewmat(optimized_camera_to_world):
     viewmat[:, :3, :3] = R_inv
     viewmat[:, :3, 3:4] = T_inv
     return viewmat
-    
+
+class InverseModelLb(torch.nn.Module):
+    def __init__(
+        self,
+        A0,  # 1*2*2
+    ):
+        super().__init__()  # Initialize the base class first
+        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+        self.A0 = A0.to(self.device)          # 1*2*2
+        self.A0_inv = torch.inverse(self.A0)
+
+    def to(self, *args, **kwargs):
+        # Move parameters and buffers
+        super(InverseModelLb, self).to(*args, **kwargs)
+        device = args[0] if args else kwargs.get('device', None)
+        if device is not None:
+            # Move more custom tensors
+            self.A0 = self.A0.to(device)
+            self.A0_inv = self.A0_inv.to(device)
+            # Update device attribute
+            self.device = torch.device(device)
+        return self  # Important: Return self to allow method chaining
+
+    def forward(self, x):
+        res = self.A0_inv - self.A0_inv@(x-self.A0)@self.A0_inv 
+        return res 
+
+class InverseModelUb(torch.nn.Module):
+    def __init__(
+        self,
+        A0
+    ):
+        super().__init__()  # Initialize the base class first
+        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+        self.A0 = A0.to(self.device)          # 1*2*2
+        self.A0_inv = torch.inverse(self.A0)
+
+    def to(self, *args, **kwargs):
+        # Move parameters and buffers
+        super(InverseModelUb, self).to(*args, **kwargs)
+        device = args[0] if args else kwargs.get('device', None)
+        if device is not None:
+            # Move more custom tensors
+            self.A0 = self.A0.to(device)
+            self.A0_inv = self.A0_inv.to(device)
+            # Update device attribute
+            self.device = torch.device(device)
+        return self  # Important: Return self to allow method chaining
+
+    def forward(self, x):
+        res = self.A0_inv - self.A0_inv@(x-self.A0)@self.A0_inv+self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv 
+        return res 
+
 class AlphaModel(torch.nn.Module):
     def __init__(
         self,
@@ -195,19 +247,23 @@ class AlphaModel(torch.nn.Module):
         x = torch.cat([result, fixed_row], dim=1)  # shape: [N, 4, 4]
 
         means_cam_hom = torch.matmul(x, self.means_hom_tmp).transpose(1,2)    # [N, 4]
-        means_cam = means_cam_hom[:, :, :3] / means_cam_hom[:, :, 3:4]  # [N, 3]
+        means_cam = means_cam_hom[:,:,:3]
+        # means_cam = means_cam_hom[:, :, :3] / means_cam_hom[:, :, 3:4]  # [N, 3]
 
+        # Step 5: Project means onto the image plane
+        means_proj_hom = means_cam @ self.K.t()
+        z0 = means_proj_hom[:,:,2:3]
+        # means2D = means_proj_hom[:, :, :2] / means_proj_hom[:, :, 2:3]  # [N, 2]
+        means2D = means_proj_hom[:, :, :2]
+        # return means_proj_hom 
+    
         R_cam = x[:, :3, :3]  # [1, 3, 3]
         R_cam = R_cam.unsqueeze(1)  # Add an extra dimension for broadcasting
         # First multiplication: R_cam @ self.cov_world
         cov_temp = torch.matmul(R_cam, self.cov_world)  # Shape: [1, N, 3, 3]
         # Second multiplication: result @ R_cam.transpose(-1, -2)
         cov_cam = torch.matmul(cov_temp, R_cam.transpose(-1, -2))  # Shape: [1, N, 3, 3]
-
-        # Step 5: Project means onto the image plane
-        means_proj_hom = means_cam @ self.K.t()
-        means2D = means_proj_hom[:, :, :2] / means_proj_hom[:, :, 2:3]  # [N, 2]
-
+        
         # # Step 6: Compute 2D covariance matrices using the Jacobian
         x = means_cam[:, :, 0]
         y = means_cam[:, :, 1]
@@ -215,11 +271,20 @@ class AlphaModel(torch.nn.Module):
 
         tx = z_cam*torch.min(self.lim_x, torch.max(-self.lim_x, x/z_cam))
         ty = z_cam*torch.min(self.lim_y, torch.max(-self.lim_y, y/z_cam))
+        # return ty
 
-        J00 = self.fx / z_cam
-        J02 = -self.fx * tx / z_cam**2
-        J11 = self.fy / z_cam
-        J12 = -self.fy * ty / z_cam**2
+        J00 = z_cam*self.fx 
+        J02 = -self.fx * x 
+        J11 = z_cam*self.fy 
+        J12 = -self.fy * y 
+        return J12
+        # J = torch.cat([J00[:,None], J02[:,None], J11[:,None], J12[:,None]], dim=1)
+        # return J 
+        # J00 = self.fx / z_cam
+        # J02 = -self.fx * tx / z_cam**2
+        # J11 = self.fy / z_cam
+        # J12 = -self.fy * ty / z_cam**2
+        # return J12
 
         cov2D00 = (
             J00 * J00 * cov_cam[:,:,0, 0] +
@@ -243,7 +308,7 @@ class AlphaModel(torch.nn.Module):
             J02 * J11 * cov_cam[:,:,2, 1] +
             J02 * J12 * cov_cam[:,:,2, 2]
         )
-        
+    
         # Compute C[1][0]
         cov2D10 = (
             J11 * J00 * cov_cam[:,:,1, 0] +
@@ -251,30 +316,36 @@ class AlphaModel(torch.nn.Module):
             J12 * J00 * cov_cam[:,:,2, 0] +
             J12 * J02 * cov_cam[:,:,2, 2]
         )
-        cov2D00 = cov2D00+0.3
-        cov2D11 = cov2D11+0.3 
-        det = cov2D00*cov2D11-cov2D01*cov2D10
+        # det = cov2D00*cov2D11-cov2D01*cov2D10
 
-        b = 0.5*(cov2D00+cov2D11)
-        v1 = b+torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
-        v2 = b-torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
-        radius = 3*torch.sqrt(torch.max(v1, v2))
+        # b = 0.5*(cov2D00+cov2D11)
+        # v1 = b+torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
+        # v2 = b-torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
+        # radius = 3*torch.sqrt(torch.max(v1, v2))
 
         # conic is the inverse of cov2d
         conic00 = 1/(cov2D00*cov2D11-cov2D01*cov2D10)*cov2D11
         conic01 = 1/(cov2D00*cov2D11-cov2D01*cov2D10)*(-cov2D01)
         conic10 = 1/(cov2D00*cov2D11-cov2D01*cov2D10)*(-cov2D10)
         conic11 = 1/(cov2D00*cov2D11-cov2D01*cov2D10)*cov2D00
+        # conic = torch.stack([conic00[:,None], conic01[:,None], conic10[:,None], conic11[:,None]], dim=1)
+        return conic11
 
-        dx = self.tile_coord-means2D[:,None,:]
-
-        gauss_weight_orig = torch.exp(-0.5 * (
+        dx = z0[:,None]*z0[:,None]*self.tile_coord-z0[:,None]*means2D[:,None,:]
+        # dx = self.tile_coord-means2D[:,None,:]
+        t1 = torch.square(dx[:,:,:,0]) * conic00[:, None, :]
+        t2 = torch.square(dx[:,:,:,1]) * conic11[:, None, :]
+        t3 = dx[:,:,:,0]*dx[:,:,:,1] * conic01[:, None, :]
+        t4 = dx[:,:,:,0]*dx[:,:,:,1] * conic10[:, None, :]
+        inside = -0.5 * (
             torch.square(dx[:,:,:,0]) * conic00[:, None, :] 
             + torch.square(dx[:,:,:,1]) * conic11[:, None, :]
             + dx[:,:,:,0]*dx[:,:,:,1] * conic01[:, None, :]
-            + dx[:,:,:,0]*dx[:,:,:,1] * conic10[:, None, :]))
-        
+            + dx[:,:,:,0]*dx[:,:,:,1] * conic10[:, None, :])
+
+        gauss_weight_orig = torch.exp(inside)
         alpha = gauss_weight_orig[:,:,:,None]*self.opacities_rast
+        return alpha
 
         # alpha_clip = torch.clip(alpha, max=0.99)
         alpha_clip = -torch.nn.functional.relu(-alpha+0.99)+0.99
