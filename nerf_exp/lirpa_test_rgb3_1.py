@@ -1,7 +1,7 @@
 import torch 
 import numpy as np 
 from scipy.spatial.transform import Rotation
-from simple_model2_alphatest import AlphaModel, DepthModel
+from simple_model2 import AlphaModel, DepthModel
 import matplotlib.pyplot as plt 
 import pyvista as pv
 from typing import List, Dict
@@ -375,8 +375,8 @@ if __name__ == "__main__":
     # ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     ptb_alpha = PerturbationLpNorm(
         norm=np.inf, 
-        x_L=torch.Tensor([[-0.0,-0.0,-0.0,-0.2,-0.2,-0.2]]).to(model_alpha.device),
-        x_U=torch.Tensor([[0.0,0.0,0.0,0.2,0.2,0.2]]).to(model_alpha.device),
+        x_L=torch.Tensor([[-0.0,-0.0,-0.0,-1.0,-1.0,-1.0]]).to(model_alpha.device),
+        x_U=torch.Tensor([[0.0,0.0,0.0,1.0,1.0,1.0]]).to(model_alpha.device),
     )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb_alpha)
@@ -399,8 +399,8 @@ if __name__ == "__main__":
     # ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     ptb_depth = PerturbationLpNorm(
         norm=np.inf, 
-        x_L=torch.Tensor([[-0.0,-0.0,-0.0,-0.2,-0.2,-0.2]]).to(model_depth.device),
-        x_U=torch.Tensor([[0.0,0.0,0.0,0.2,0.2,0.2]]).to(model_depth.device),
+        x_L=torch.Tensor([[-0.0,-0.0,-0.0,-1.0,-1.0,-1.0]]).to(model_depth.device),
+        x_U=torch.Tensor([[0.0,0.0,0.0,1.0,1.0,1.0]]).to(model_depth.device),
     )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb_depth)
@@ -486,10 +486,10 @@ if __name__ == "__main__":
 
     plt.figure(1)
     plt.imshow(tile_color_lb)
-    plt.title("computed lb")
+    plt.title("computed lb OLD")
     plt.figure(2)
     plt.imshow(tile_color_ub)
-    plt.title("computed ub")
+    plt.title("computed ub OLD")
     plt.figure(3)
     plt.imshow(empirical_lb)
     plt.title("empirical lb")

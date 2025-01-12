@@ -48,10 +48,11 @@ class InverseModelLb(torch.nn.Module):
     def __init__(
         self,
         A0,  # 1*2*2
+        device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     ):
         super().__init__()  # Initialize the base class first
-        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-        self.A0 = A0.to(self.device)          # 1*2*2
+        self.device = device
+        self.A0 = A0.to(self.device)          
         self.A0_inv = torch.inverse(self.A0)
 
     def to(self, *args, **kwargs):
@@ -69,18 +70,19 @@ class InverseModelLb(torch.nn.Module):
     def forward(self, x):
         res = self.A0_inv \
             - self.A0_inv@(x-self.A0)@self.A0_inv
+        return res
             # + self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv\
             # - self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv
-        return res 
 
 class InverseModelUb(torch.nn.Module):
     def __init__(
         self,
-        A0
+        A0, # 1*2*2
+        device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     ):
         super().__init__()  # Initialize the base class first
-        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-        self.A0 = A0.to(self.device)          # 1*2*2
+        self.device = device
+        self.A0 = A0.to(self.device)          
         self.A0_inv = torch.inverse(self.A0)
 
     def to(self, *args, **kwargs):
@@ -99,6 +101,10 @@ class InverseModelUb(torch.nn.Module):
         res = self.A0_inv \
             - self.A0_inv@(x-self.A0)@self.A0_inv\
             + self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv
+            # + (((
+            #     self.A0_inv.transpose(1,2)@(x-self.A0).transpose(1,2)).transpose(1,2)@(x-self.A0)
+            #     ).transpose(1,2)@self.A0_inv.transpose(1,2)
+            # ).transpose(1,2)@self.A0_inv
             # - self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv\
             # + self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv@(x-self.A0)@self.A0_inv
         return res 
@@ -360,57 +366,154 @@ class AlphaModel(torch.nn.Module):
         return alpha_clip
 
 
-class DepthModel(torch.nn.Module):
+class AlphaModel2(torch.nn.Module):
     def __init__(
-            self,
-            input_model: AlphaModel, 
-
+        self,
+        data_pack,
+        fx=2343.0242837919386,
+        fy=2343.0242837919386,
+        width=2560,
+        height=1440,
+        tile_size=16,
     ):
-        super(DepthModel, self).__init__()
-        self.means_hom_tmp = input_model.means_hom_tmp
-        self.device = input_model.device 
+        super().__init__()  # Initialize the base class first
+
+        self.fx = fx 
+        self.fy = fy
+        self.width = width
+        self.height = height
+
+        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
+        self.setup_camera(data_pack)
+        self.prepare_rasterization_coefficients(
+            tile_size=tile_size
+        )
+        # self.shrink_rasterization_coefficients()
+
+        self.prepare_render_coefficients()
+        self.colors = None 
 
     def to(self, *args, **kwargs):
         # Move parameters and buffers
-        super(DepthModel, self).to(*args, **kwargs)
+        super(AlphaModel, self).to(*args, **kwargs)
         device = args[0] if args else kwargs.get('device', None)
         if device is not None:
+            # Move more custom tensors
+            self.means_hom = self.means_hom.to(device)
             self.means_hom_tmp = self.means_hom_tmp.to(device)
+            self.cov_world = self.cov_world.to(device)
+            self.means = self.means.to(device)
+            self.quats = self.quats.to(device)
+            self.scales = self.scales.to(device)
+            self.opacities = self.opacities.to(device)
+            self.opacities_rast = self.opacities_rast.to(device)
+            # self.overall_mask = self.overall_mask.to(device)  # Avoid error
+
+            self.K = self.K.to(device)
+            self.lim_x = self.lim_x.to(device) 
+            self.lim_y = self.lim_y.to(device)
+            self.tile_coord = self.tile_coord.to(device)
+            # Update device attribute
             self.device = torch.device(device)
-        return self         
+        return self  # Important: Return self to allow method chaining
 
-    def forward(self, x):
-        # Define your computation here.
-        gamma = x[:,0:1]
-        beta = x[:,1:2]
-        alpha = x[:,2:3]
-        R00 = torch.cos(beta)*torch.cos(gamma)
-        R01 = torch.sin(alpha)*torch.sin(beta)*torch.cos(gamma)-torch.cos(alpha)*torch.sin(gamma)
-        R02 = torch.cos(alpha)*torch.sin(beta)*torch.cos(gamma)+torch.sin(alpha)*torch.sin(gamma)
-        R03 = x[:,3:4]
-        R10 = torch.cos(beta)*torch.sin(gamma)
-        R11 = torch.sin(alpha)*torch.sin(beta)*torch.sin(gamma)+torch.cos(alpha)*torch.cos(gamma)
-        R12 = torch.cos(alpha)*torch.sin(beta)*torch.sin(gamma)-torch.sin(alpha)*torch.cos(gamma)
-        R13 = x[:,4:5]
-        R20 = -torch.sin(beta)
-        R21 = torch.sin(alpha)*torch.cos(beta)
-        R22 = torch.cos(alpha)*torch.cos(beta)
-        R23 = x[:,5:6]
-        combined = torch.cat([R00, R01, R02, R03, R10, R11, R12, R13, R20, R21, R22, R23], dim=1)
-        result = combined.view(-1, 3, 4)
-        # 3) Prepare the fixed 4th row [0, 0, 0, 1] as shape [N, 1, 4]
-        #    We'll broadcast (expand) this row for each of the N samples.
-        fixed_row = torch.tensor([0, 0, 0, 1]).view(1, 1, 4).to(self.device)
-        fixed_row = fixed_row.expand(result.shape[0], 1, 4)  # shape: [N, 1, 4]
+    def setup_camera(self, data_pack):
+        self.opacities = data_pack['opacities'].to(self.device)
+        self.means = data_pack['means'].to(self.device)
+        # base_color = self.model.base_colors
+        self.scales = data_pack['scales'].to(self.device)
+        self.quats = data_pack['quats'].to(self.device)
 
-        # 4) Concatenate the top 3 rows and the fixed 4th row => [N, 4, 4]
-        x = torch.cat([result, fixed_row], dim=1)  # shape: [N, 4, 4]
+        # apply the compensation of screen space blurring to gaussians
+        self.BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
+        self.K = torch.Tensor([
+            [self.fx, 0, self.width/2],
+            [0, self.fy, self.height/2],
+            [0,0,1]
+        ]).to(self.device)
+
+    @torch.no_grad()
+    def prepare_rasterization_coefficients(
+            self,
+            near_plane=0.01, 
+            far_plane=1e10, 
+            sh_degree=3, 
+            tile_size=16,
+            eps2d = 0.3,
+            radius_clip = 0.0
+        ):
+        self.tile_size = tile_size
+
+        Ks = torch.tensor([[
+            [self.fx, 0, self.width/2],
+            [0, self.fy, self.height/2],
+            [0, 0, 1]
+        ]]).to(self.device)
+        means = self.means 
+        quats = self.quats 
+        scales = torch.exp(self.scales)
+        opacities = torch.sigmoid(self.opacities)
+        self.opacities_rast = opacities[None, None,...]
+        width = self.width
+        height = self.height
         
-        means_cam_hom = torch.matmul(x, self.means_hom_tmp).transpose(1,2)    # [N, 4]
-        means_cam = means_cam_hom[:, :, :3] / means_cam_hom[:, :, 3:4]  # [N, 3]
+        K = Ks[0]              # [3, 3]
 
-        return means_cam[:,:,2]
+        N = means.size(0)
+        self.N = N
     
-class RGBModel(torch.nn.Module):
+        dtype = means.dtype
+
+        # Step 1: Transform Gaussian centers to camera space
+        ones = torch.ones(N, 1, device=self.device, dtype=dtype)
+        self.means_hom = torch.cat([means, ones], dim=1).to(self.device)  # [N, 4]
+        self.means_hom = self.means_hom.unsqueeze(0)
+        self.means_hom_tmp = self.means_hom.transpose(1,2)
+        
+        # Step 2: Compute rotation matrices from quaternions
+        R_gaussians = quaternion_to_rotation_matrix(quats)  # [N, 3, 3]
+
+        # Step 3: Compute covariance matrices in world space
+        scales_matrix = torch.diag_embed(scales).to(self.device)  # [N, 3, 3]
+        M = R_gaussians@scales_matrix
+        self.cov_world = M @ M.transpose(1, 2)  # [N, 3, 3]
+        # self.cov_world = self.cov_world.unsqueeze(0)  # Don't need an extra dimension that brings confusions
+        self.tan_fovx = 0.5*self.width/self.fx 
+        self.tan_fovy = 0.5*self.height/self.fy 
+        self.lim_x = torch.Tensor([1.3*self.tan_fovx]).to(self.device) 
+        self.lim_y = torch.Tensor([1.3*self.tan_fovy]).to(self.device)
+
+    @torch.no_grad()
+    def prepare_render_coefficients(self):
+        pix_coord = torch.stack(torch.meshgrid(torch.arange(self.width), torch.arange(self.height), indexing='xy'), dim=-1).to(self.device)
+        self.tile_coord = pix_coord.flatten(0,-2)[None,:,None,:]
+
     def forward(self, x):
-        pass 
+        # conic is the inverse of cov2d
+        conic00 = x[:,0,0,:]
+        conic01 = x[:,0,1,:]
+        conic10 = x[:,1,0,:]
+        conic11 = x[:,1,1,:]
+        # conic = torch.stack([conic00[:,None], conic01[:,None], conic10[:,None], conic11[:,None]], dim=1)
+
+        dx = z0[:,None]*z0[:,None]*self.tile_coord-z0[:,None]*means2D[:,None,:]
+        # dx = self.tile_coord-means2D[:,None,:]
+        t1 = torch.square(dx[:,:,:,0]) * conic00[:, None, :]
+        t2 = torch.square(dx[:,:,:,1]) * conic11[:, None, :]
+        t3 = dx[:,:,:,0]*dx[:,:,:,1] * conic01[:, None, :]
+        t4 = dx[:,:,:,0]*dx[:,:,:,1] * conic10[:, None, :]
+        inside = -0.5 * (
+            torch.square(dx[:,:,:,0]) * conic00[:, None, :] 
+            + torch.square(dx[:,:,:,1]) * conic11[:, None, :]
+            + dx[:,:,:,0]*dx[:,:,:,1] * conic01[:, None, :]
+            + dx[:,:,:,0]*dx[:,:,:,1] * conic10[:, None, :])
+
+        gauss_weight_orig = torch.exp(inside)
+        alpha = gauss_weight_orig[:,:,:,None]*self.opacities_rast
+        return alpha
+
+        # alpha_clip = torch.clip(alpha, max=0.99)
+        alpha_clip = -torch.nn.functional.relu(-alpha+0.99)+0.99
+
+        return alpha_clip

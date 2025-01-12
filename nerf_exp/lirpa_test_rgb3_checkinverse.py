@@ -1,7 +1,7 @@
 import torch 
 import numpy as np 
 from scipy.spatial.transform import Rotation
-from simple_model2_inversetest import AlphaModel, InverseModelLb, InverseModelUb
+from simple_model2_inversetest import AlphaModel, InverseModelLb, InverseModelUb, AlphaModel2
 import matplotlib.pyplot as plt 
 import pyvista as pv
 from typing import List, Dict
@@ -333,12 +333,21 @@ if __name__ == "__main__":
         width=w,
         height=h,
     )
-    J0 = torch.Tensor(np.array([
-        [420,0,0],[0,420,0]
-    ])).to(model_alpha.device)
-    cov = model_alpha.cov_world[1]
-    A0 = J0@cov@J0.T
-    A0 = A0[None]
+    A_lb = torch.Tensor([[
+        [96794.266, -718.9259],
+        [-718.9259,  96794.3]
+    ]])
+    A_ub = torch.Tensor([[
+        [142558.67, 718.92676],
+        [718.92676, 142558.69]
+    ]])
+    A0 = ((A_lb+A_ub)/2).to(model_alpha.device)
+    # J0 = torch.Tensor(np.array([
+    #     [420,0,0],[0,420,0]
+    # ])).to(model_alpha.device)
+    # cov = model_alpha.cov_world[1]
+    # A0 = J0@cov@J0.T
+    # A0 = A0[None]
     print("###### Model Alpha")
 
     model_inverse_lb = InverseModelLb(A0)
@@ -350,29 +359,44 @@ if __name__ == "__main__":
     # ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     ptb_A = PerturbationLpNorm(
         norm=np.inf, 
-        x_L=torch.Tensor([[
-            [96794.266, -718.9259],
-            [-718.9259, 96794.3]
-        ]]).to(model_inverse_lb.device),
-        x_U=torch.Tensor([[
-            [142558.67, 718.92676],
-            [718.92676, 142558.69]
-        ]]).to(model_inverse_lb.device),
+        x_L=A_lb.to(model_inverse_lb.device),
+        x_U=A_ub.to(model_inverse_lb.device),
     )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(A0, ptb_A)
-    # prediction = model_inverselb_bounded(my_input)
-    # model_alpha_bounded.visualize('a')
     print(">>>>>> Starting Bounded Module")
     model_inverselb_bounded = BoundedModule(model_inverse_lb, A0, device=model_inverse_lb.device, bound_opts={'conv_mode': 'matrix'})
+    prediction = model_inverselb_bounded(my_input)
+    model_inverselb_bounded.visualize('inverse_lb')
     print(">>>>>> Starting Compute Bound")
     lb_inverselb, ub_inverselb = model_inverselb_bounded.compute_bounds(x=(my_input, ), method='ibp')
     print(">>>>>> Starting Bounded Module")
     model_inverseub_bounded = BoundedModule(model_inverse_ub, A0, device=model_inverse_ub.device, bound_opts={'conv_mode': 'matrix'})
+    prediction = model_inverseub_bounded(my_input)
+    model_inverseub_bounded.visualize('inverse_ub')
     print(">>>>>> Starting Compute Bound")
     lb_inverseub, ub_inverseub = model_inverseub_bounded.compute_bounds(x=(my_input, ), method='ibp')
     
     print(lb_inverselb, ub_inverseub)
+
+    lb_inverse = lb_inverselb.detach().cpu().numpy()
+    ub_inverse = ub_inverseub.detach().cpu().numpy()
+    lb_inverseub = lb_inverseub.detach().cpu().numpy()
+    ub_inverseub = ub_inverseub.detach().cpu().numpy()
+    for i in range(100):
+        lambda_val = torch.rand((1,2,2))
+        inp = lambda_val*A_lb+(1-lambda_val)*A_ub 
+        if torch.any(inp<A_lb) or torch.any(A_ub<inp):
+            print("wrong input bound")
+        res = model_inverse_ub(inp.to(model_inverse_ub.device))
+        res = res.detach().cpu().numpy()
+        if np.any(res<lb_inverseub) or np.any(ub_inverseub<res):
+            print("bound violate 1")
+        res2 = torch.inverse(inp)
+        res2 = res2.detach().cpu().numpy()
+        if np.any(res<lb_inverse) or np.any(ub_inverse < res2) :
+            print("bound violate 2")
+
     
     # plt.figure(7)
     # plt.imshow(diff_compemp_lb)

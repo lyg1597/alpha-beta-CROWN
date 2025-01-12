@@ -247,23 +247,22 @@ class AlphaModel(torch.nn.Module):
         )
         
         # Compute C[0][1]
-        cov2D01 = (
+        cov2D0110 = (
             J00 * J11 * cov_cam[:,:,0, 1] +
             J00 * J12 * cov_cam[:,:,0, 2] +
             J02 * J11 * cov_cam[:,:,2, 1] +
             J02 * J12 * cov_cam[:,:,2, 2]
         )
     
-        # Compute C[1][0]
-        cov2D10 = (
-            J11 * J00 * cov_cam[:,:,1, 0] +
-            J11 * J02 * cov_cam[:,:,1, 2] +
-            J12 * J00 * cov_cam[:,:,2, 0] +
-            J12 * J02 * cov_cam[:,:,2, 2]
-        )
+        # # Compute C[1][0]
+        # cov2D10 = (
+        #     J11 * J00 * cov_cam[:,:,1, 0] +
+        #     J11 * J02 * cov_cam[:,:,1, 2] +
+        #     J12 * J00 * cov_cam[:,:,2, 0] +
+        #     J12 * J02 * cov_cam[:,:,2, 2]
+        # )
         cov2D00 = cov2D00
         cov2D11 = cov2D11 
-        return cov2D11
         # det = cov2D00*cov2D11-cov2D01*cov2D10
 
         # b = 0.5*(cov2D00+cov2D11)
@@ -272,24 +271,24 @@ class AlphaModel(torch.nn.Module):
         # radius = 3*torch.sqrt(torch.max(v1, v2))
 
         # conic is the inverse of cov2d
-        conic00 = 1/(cov2D00*cov2D11-cov2D01*cov2D10)*cov2D11
-        conic01 = 1/(cov2D00*cov2D11-cov2D01*cov2D10)*(-cov2D01)
-        conic10 = 1/(cov2D00*cov2D11-cov2D01*cov2D10)*(-cov2D10)
-        conic11 = 1/(cov2D00*cov2D11-cov2D01*cov2D10)*cov2D00
-        # conic = torch.stack([conic00[:,None], conic01[:,None], conic10[:,None], conic11[:,None]], dim=1)
-        return conic11
-
+        conic00 = 1/(cov2D00*cov2D11-cov2D0110*cov2D0110)*cov2D11
+        conic0110 = 1/(cov2D00*cov2D11-cov2D0110*cov2D0110)*(-cov2D0110)
+        conic11 = 1/(cov2D00*cov2D11-cov2D0110*cov2D0110)*cov2D00
+        # return conic00
+        conic = torch.stack([conic00[:,None], conic0110[:,None], conic0110[:,None], conic11[:,None]], dim=1)
+        return conic 
+    
         dx = z0[:,None]*z0[:,None]*self.tile_coord-z0[:,None]*means2D[:,None,:]
         # dx = self.tile_coord-means2D[:,None,:]
         t1 = torch.square(dx[:,:,:,0]) * conic00[:, None, :]
         t2 = torch.square(dx[:,:,:,1]) * conic11[:, None, :]
-        t3 = dx[:,:,:,0]*dx[:,:,:,1] * conic01[:, None, :]
-        t4 = dx[:,:,:,0]*dx[:,:,:,1] * conic10[:, None, :]
+        t3 = dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :]
+        t4 = dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :]
         inside = -0.5 * (
             torch.square(dx[:,:,:,0]) * conic00[:, None, :] 
             + torch.square(dx[:,:,:,1]) * conic11[:, None, :]
-            + dx[:,:,:,0]*dx[:,:,:,1] * conic01[:, None, :]
-            + dx[:,:,:,0]*dx[:,:,:,1] * conic10[:, None, :])
+            + dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :]
+            + dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :])
 
         gauss_weight_orig = torch.exp(inside)
         alpha = gauss_weight_orig[:,:,:,None]*self.opacities_rast
