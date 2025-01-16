@@ -16,10 +16,10 @@ from typing import List
 from collections import defaultdict
 
 class EpsModel(torch.nn.Module):
-    def __init__(self, A0inv):
+    def __init__(self, A0inv, device):
         super().__init__()
-        self.A0inv = A0inv
-        self.device = torch.device('cuda')
+        self.A0inv = A0inv.to(device)
+        self.device = device
 
     def to(self, *args, **kwargs):
         # Move parameters and buffers
@@ -68,7 +68,7 @@ class EpsModel(torch.nn.Module):
             (torch.eye(2).to(x.device)+t4)@\
             (torch.eye(2).to(x.device)+t8)@\
             (torch.eye(2).to(x.device)+t16)#@\
-            # (torch.eye(2).to(x.device)+t32)@\
+            # (torch.eye(2).to(x.device)+t32)#@\
             # (torch.eye(2).to(x.device)+t64)
         
         return ft
@@ -117,24 +117,24 @@ class BoundInverse(Bound):
         A_lb, A_ub = x.lower, x.upper
         A0 = (A_lb+A_ub)/2
         delta = (A_ub-A_lb)/2
-        A0inv = torch.inverse(A0)
+        A0inv = torch.inverse(A0).squeeze()
         val = torch.norm(delta@A0inv)   
-        T = torch.norm(A0inv)*val**32/(1-val)
+        T = torch.norm(A0inv)*val**16/(1-val)
         T_mat = torch.Tensor([[
             [T, T/np.sqrt(2)],
             [T/np.sqrt(2), T]
-        ]])
+        ]]).to(A0.device)
 
         # model_inverse_lb = InverseModelLb(A0)
         # model_inverse_ub = InverseModelUb(A0)
-        eps_model = EpsModel(A0inv)
+        eps_model = EpsModel(A0inv, device = A0inv.device)
     
-        ptb_A = PerturbationLpNorm(
+        ptb_delta = PerturbationLpNorm(
             norm=np.inf, 
-            x_L=A_lb.to(eps_model.device),
-            x_U=A_ub.to(eps_model.device),
+            x_L=-delta.to(eps_model.device),
+            x_U=delta.to(eps_model.device),
         )
-        my_input = BoundedTensor(A0, ptb_A)
+        my_input = BoundedTensor(A0, ptb_delta)
         model_eps_bounded = BoundedModule(eps_model, A0, device=eps_model.device, bound_opts={'conv_mode': 'matrix'})
         required_A = defaultdict(set)
         required_A[model_eps_bounded.output_name[0]].add(model_eps_bounded.input_name[0])
@@ -145,12 +145,17 @@ class BoundInverse(Bound):
         EpsAub: torch.Tensor = A_eps[model_eps_bounded.output_name[0]][model_eps_bounded.input_name[0]]['uA']
         Epsbiasub: torch.Tensor = A_eps[model_eps_bounded.output_name[0]][model_eps_bounded.input_name[0]]['ubias']
         # print(lb_inverselb, ub_inverseub)
+        Epsbiaslb = Epsbiaslb.reshape((-1,2,2))
+        Epsbiasub = Epsbiasub.reshape((-1,2,2))
 
+        A0 = A0.squeeze()
         lA = last_lA*EpsAlb.transpose(0,1)
-        lbias = last_lA.sum(dim=list(range(2, last_lA.ndim)))*(Epsbiaslb.transpose(0,1)+T_mat) # TODO: Check This Line
+        lfirst_term = -(last_lA*EpsAlb.transpose(0,1)*A0[None,None]).sum(dim=list(range(2, last_lA.ndim)))
+        lbias = lfirst_term+last_lA.sum(dim=list(range(2, last_lA.ndim)))*(Epsbiaslb-T_mat).reshape((-1,1)) # TODO: Check This Line
 
         uA = last_uA*EpsAub.transpose(0,1)
-        ubias = last_uA.sum(dim=list(range(2, last_uA.ndim)))*(Epsbiasub.transpose(0,1)+T_mat) # TODO: Check This Line
+        ufirst_term = -(last_uA*EpsAub.transpose(0,1)*A0[None,None]).sum(dim=list(range(2, last_uA.ndim)))
+        ubias = ufirst_term+last_uA.sum(dim=list(range(2, last_uA.ndim)))*(Epsbiasub+T_mat).reshape((-1,1)) # TODO: Check This Line
 
         return [(lA, uA)], lbias, ubias
 
@@ -160,20 +165,20 @@ class BoundInverse(Bound):
         delta = (A_ub-A_lb)/2
         A0inv = torch.inverse(A0)
         val = torch.norm(delta@A0inv)   
-        T = torch.norm(A0inv)*val**32/(1-val)
+        T = torch.norm(A0inv)*val**16/(1-val)
         T_mat = torch.Tensor([[
             [T, T/np.sqrt(2)],
             [T/np.sqrt(2), T]
-        ]])
+        ]]).to(A0.device)
 
-        eps_model = EpsModel(A0inv)
+        eps_model = EpsModel(A0inv, A0inv.device)
     
-        ptb_A = PerturbationLpNorm(
+        ptb_delta = PerturbationLpNorm(
             norm=np.inf, 
-            x_L=A_lb.to(eps_model.device),
-            x_U=A_ub.to(eps_model.device),
+            x_L=-delta.to(eps_model.device),
+            x_U=delta.to(eps_model.device),
         )
-        my_input = BoundedTensor(A0, ptb_A)
+        my_input = BoundedTensor(torch.zeros(delta.shape).to(delta.device), ptb_delta)
         model_eps_bounded = BoundedModule(eps_model, A0, device=eps_model.device, bound_opts={'conv_mode': 'matrix'})
         required_A = defaultdict(set)
         required_A[model_eps_bounded.output_name[0]].add(model_eps_bounded.input_name[0])
@@ -189,13 +194,13 @@ register_custom_op("custom::Inverse", BoundInverse)
 
 if __name__ == "__main__":
     class InverseModel(nn.Module):
-        def __init__(self):
+        def __init__(self, device = 'cpu'):
             super().__init__()
             self.inv_op = Inverse()
             self.const = torch.Tensor([[
                 [2,0],
                 [0,3]
-            ]]).to('cuda')
+            ]]).to(device)
         
         def to(self, *args, **kwargs):
             # Move parameters and buffers
@@ -207,34 +212,50 @@ if __name__ == "__main__":
             return self  # Important: Return self to allow method chaining
 
         def forward(self, x):
-            x = x+self.const
             # res = x
-            res = torch.pow(x,6)
+            # res = torch.pow(x,6)
             res = self.inv_op(x)
-            res = torch.pow(res, 4)
-            res = torch.abs(res)
+            # res = torch.pow(res, 4)
+            # res = torch.abs(res)
             return res    
 
     A_lb = torch.Tensor([[[
         [58951.977, -2156.779],
         [-2156.7783,  86873.53],
-    ],[
-        [96794.266, -718.9259],
-        [-718.9259,  96794.3],
-    ],[
-        [107970.2, -2156.7788],
-        [-2156.779, 71892.664],
     ]]]).to('cuda')
     A_ub = torch.Tensor([[[
-        [93460.44, 2156.7783],
-        [2156.7793, 130492.9]
-    ],[
         [142558.67, 718.92676],
         [718.92676, 142558.69]
-    ],[
-        [160912.1, 2156.7793],
-        [2156.7793, 104244.3]
     ]]]).to('cuda')
+    
+    # A_lb = torch.Tensor([[[
+    #     [58951.977, -2156.779],
+    #     [-2156.7783,  86873.53],
+    # ],[
+    #     [96794.266, -718.9259],
+    #     [-718.9259,  96794.3],
+    # ],[
+    #     [107970.2, -2156.7788],
+    #     [-2156.779, 71892.664],
+    # ]]]).to('cuda')
+    # A_ub = torch.Tensor([[[
+    #     [93460.44, 2156.7783],
+    #     [2156.7793, 130492.9]
+    # ],[
+    #     [142558.67, 718.92676],
+    #     [718.92676, 142558.69]
+    # ],[
+    #     [160912.1, 2156.7793],
+    #     [2156.7793, 104244.3]
+    # ]]]).to('cuda')
+    # A_lb = torch.Tensor([[
+    #     [0.9,0],
+    #     [0,0.9]
+    # ]]).to('cuda')
+    # A_ub = torch.Tensor([[
+    #     [1.1,0],
+    #     [0,1.1]
+    # ]]).to('cuda')
     A0 = ((A_lb+A_ub)/2)
 
     model = InverseModel()
@@ -248,7 +269,16 @@ if __name__ == "__main__":
     model_inverse_bounded = BoundedModule(model, A0, device=torch.device('cuda'), bound_opts={'conv_mode': 'matrix'})
     prediction = model_inverse_bounded(my_input)
     model_inverse_bounded.visualize('inverse')
-    # lb_inverse, ub_inverse = model_inverse_bounded.compute_bounds(x=(my_input, ), method='ibp')
-    lb_inverse, ub_inverse = model_inverse_bounded.compute_bounds(x=(my_input, ), method='crown')
+    
+    lb_inverse, ub_inverse = model_inverse_bounded.compute_bounds(x=(my_input, ), method='ibp')
     print(lb_inverse, ub_inverse)
-
+    
+    # required_A = defaultdict(set)
+    # required_A[model_inverse_bounded.output_name[0]].add(model_inverse_bounded.input_name[0])
+    # lb_inverse, ub_inverse, A_inverse = model_inverse_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A, can_skip=True)
+    # print(lb_inverse, ub_inverse)
+    # InverseAlb: torch.Tensor = A_inverse[model_inverse_bounded.output_name[0]][model_inverse_bounded.input_name[0]]['lA']
+    # Inversebiaslb: torch.Tensor = A_inverse[model_inverse_bounded.output_name[0]][model_inverse_bounded.input_name[0]]['lbias']
+    # InverseAub: torch.Tensor = A_inverse[model_inverse_bounded.output_name[0]][model_inverse_bounded.input_name[0]]['uA']
+    # Inversebiasub: torch.Tensor = A_inverse[model_inverse_bounded.output_name[0]][model_inverse_bounded.input_name[0]]['ubias']
+    

@@ -1,6 +1,6 @@
 import torch 
 import numpy as np 
-from inverse_op import Inverse
+from inverse_op2 import Inverse
 
 def quaternion_to_rotation_matrix(quats):
     """
@@ -265,32 +265,42 @@ class AlphaModel(torch.nn.Module):
         # )
         cov2D00 = cov2D00
         cov2D11 = cov2D11 
-        cov2D = torch.stack([cov2D00, cov2D0110, cov2D0110, cov2D11],dim=2).view(1,-1,2,2)
+        cov2D = torch.stack([cov2D00[:,:], cov2D0110[:,:], cov2D0110[:,:], cov2D11[:,:]], dim=2).reshape((1,-1,2,2))
         conic = self.inv_op(cov2D)
-        return conic
-
         conic00 = conic[:,:,0,0]
         conic0110 = conic[:,:,0,1]
         conic11 = conic[:,:,1,1]
-        # det = cov2D00*cov2D11-cov2D01*cov2D10
+        # # det = cov2D00*cov2D11-cov2D01*cov2D10
 
-        # b = 0.5*(cov2D00+cov2D11)
-        # v1 = b+torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
-        # v2 = b-torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
-        # radius = 3*torch.sqrt(torch.max(v1, v2))
+        # # b = 0.5*(cov2D00+cov2D11)
+        # # v1 = b+torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
+        # # v2 = b-torch.sqrt(torch.max(torch.ones(det.shape).to(det.device)*0.1, b*b-det))
+        # # radius = 3*torch.sqrt(torch.max(v1, v2))
 
-        # conic is the inverse of cov2d
+        # # conic is the inverse of cov2d
         # conic00 = 1/(cov2D00*cov2D11-cov2D0110*cov2D0110)*cov2D11
         # conic0110 = 1/(cov2D00*cov2D11-cov2D0110*cov2D0110)*(-cov2D0110)
         # conic11 = 1/(cov2D00*cov2D11-cov2D0110*cov2D0110)*cov2D00
-        # conic = torch.stack([conic00[:,None], conic01[:,None], conic10[:,None], conic11[:,None]], dim=1)
-
+        # conic = torch.stack([conic00[:,None], conic0110[:,None], conic0110[:,None], conic11[:,None]], dim=1)
+        # conic = self.inv_op(conic)
+        # # # return conic00.unsqueeze(1)
+        # # ttt = conic00.unsqueeze(1)
+        # # # ttt = conic00[:,None]+1
+        # # return ttt
+        # # return conic 
+    
         dx = z0[:,None]*z0[:,None]*self.tile_coord-z0[:,None]*means2D[:,None,:]
+        # dx = self.tile_coord-means2D[:,None,:]
+        # t1 = torch.square(dx[:,:,:,0]) * conic00[:, None, :]
+        # t2 = torch.square(dx[:,:,:,1]) * conic11[:, None, :]
+        # t3 = dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :]
+        # t4 = dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :]
         inside = -0.5 * (
             torch.square(dx[:,:,:,0]) * conic00[:, None, :] 
             + torch.square(dx[:,:,:,1]) * conic11[:, None, :]
             + dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :]
             + dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :])
+        # return inside
 
         gauss_weight_orig = torch.exp(inside)
         alpha = gauss_weight_orig[:,:,:,None]*self.opacities_rast

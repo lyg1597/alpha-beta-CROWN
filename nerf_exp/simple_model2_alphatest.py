@@ -274,9 +274,12 @@ class AlphaModel(torch.nn.Module):
         conic00 = 1/(cov2D00*cov2D11-cov2D0110*cov2D0110)*cov2D11
         conic0110 = 1/(cov2D00*cov2D11-cov2D0110*cov2D0110)*(-cov2D0110)
         conic11 = 1/(cov2D00*cov2D11-cov2D0110*cov2D0110)*cov2D00
-        # return conic00
-        conic = torch.stack([conic00[:,None], conic0110[:,None], conic0110[:,None], conic11[:,None]], dim=1)
-        return conic 
+        # # return conic00.unsqueeze(1)
+        # ttt = conic00.unsqueeze(1)
+        # # ttt = conic00[:,None]+1
+        # return ttt
+        # conic = torch.stack([conic00[:,None], conic0110[:,None], conic0110[:,None], conic11[:,None]], dim=1)
+        # return conic 
     
         dx = z0[:,None]*z0[:,None]*self.tile_coord-z0[:,None]*means2D[:,None,:]
         # dx = self.tile_coord-means2D[:,None,:]
@@ -289,6 +292,7 @@ class AlphaModel(torch.nn.Module):
             + torch.square(dx[:,:,:,1]) * conic11[:, None, :]
             + dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :]
             + dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :])
+        # return inside
 
         gauss_weight_orig = torch.exp(inside)
         alpha = gauss_weight_orig[:,:,:,None]*self.opacities_rast

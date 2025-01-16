@@ -1,12 +1,5 @@
 import torch 
 import numpy as np 
-from scipy.spatial.transform import Rotation
-from simple_model2_inversetest import AlphaModel, InverseModelLb, InverseModelUb, AlphaModel2
-import matplotlib.pyplot as plt 
-import pyvista as pv
-from typing import List, Dict
-from collections import defaultdict
-import itertools
 from auto_LiRPA import BoundedModule, BoundedTensor, PerturbationLpNorm
 
 class InverseModel(torch.nn.Module):
@@ -76,9 +69,9 @@ class EpsModel(torch.nn.Module):
         t64 = t32@t32
         ft = self.A0inv@\
             (torch.eye(2).to(x.device)-t2)@\
-            (torch.eye(2).to(x.device)+t4)
-            # (torch.eye(2).to(x.device)+t8)
-            # (torch.eye(2).to(x.device)+t16)@\
+            (torch.eye(2).to(x.device)+t4)@\
+            (torch.eye(2).to(x.device)+t8)@\
+            (torch.eye(2).to(x.device)+t16)
             # (torch.eye(2).to(x.device)+t32)@\
             # (torch.eye(2).to(x.device)+t64)
         
@@ -86,15 +79,33 @@ class EpsModel(torch.nn.Module):
 
 if __name__ == "__main__":
 
-    A_lb = torch.Tensor([[
-        [0.9,0.8998],
-        [0.8998,0.9]
-    ]])
-    A_ub = torch.Tensor([[
-        [1.0,0.8999],
-        [0.8999,1.0]
-    ]])
-    A0 = ((A_lb+A_ub)/2).squeeze()
+    # A_lb = torch.Tensor([[[
+    #     [58951.977, -2156.779],
+    #     [-2156.7783,  86873.53],
+    # ]]])
+    # A_ub = torch.Tensor([[[
+    #     [142558.67, 718.92676],
+    #     [718.92676, 142558.69]
+    # ]]])
+
+    A_lb = torch.Tensor([[[
+        [58951.977, -2156.779],
+        [-2156.7783,  86873.53],
+    ]]])
+    A_ub = torch.Tensor([[[
+        [142558.67, 718.92676],
+        [718.92676, 142558.69]
+    ]]])
+    # A_lb = torch.Tensor([[[
+    #     [0.9,-0.1],
+    #     [-0.1,0.9]
+    # ]]])
+    # A_ub = torch.Tensor([[[
+    #     [1.1,0.1],
+    #     [0.1,1.1]
+    # ]]])
+
+    A0 = ((A_lb+A_ub)/2).squeeze(0)
     A0inv = torch.inverse(A0)
     delta = (A_ub-A_lb)/2
     eps = torch.norm(delta@A0inv)
@@ -109,12 +120,15 @@ if __name__ == "__main__":
     )
     my_input = BoundedTensor(delta0, ptb_A)
     model_bounded = BoundedModule(modeleps, delta0, device = 'cpu', bound_opts={'conv_mode': 'matrix'})
-    lb_eps, ub_eps = model_bounded.compute_bounds(x=(my_input, ), method='crown')
+    prediction = model_bounded(my_input)
+    model_bounded.visualize('inverse_new')
+    
+    lb_eps, ub_eps = model_bounded.compute_bounds(x=(my_input, ), method='alpha-crown')
     # print(lb_eps, ub_eps)
     # if eps>1:
     #     print("EPS constraint Violated")
 
-    T = torch.norm(A0inv)*eps**4/(1-eps)
+    T = torch.norm(A0inv)*eps**16/(1-eps)
     print(T)
 
     res_lb = lb_eps-torch.Tensor([[
@@ -138,7 +152,7 @@ if __name__ == "__main__":
     )
     inp_A = BoundedTensor(A0, ptb_A)
     model_bounded = BoundedModule(modelinv, delta0, device = 'cpu', bound_opts={'conv_mode': 'matrix'})
-    lb_inv, ub_inv = model_bounded.compute_bounds(x=(inp_A, ), method='ibp')
+    lb_inv, ub_inv = model_bounded.compute_bounds(x=(inp_A, ), method='alpha-crown')
     print("crown: ", lb_inv, ub_inv)
 
 
@@ -155,67 +169,3 @@ if __name__ == "__main__":
         #     print("bound violated")
     print("emp: ", emp_lb, emp_ub)
 
-    # inv_model = InvModel(A0)
-    # res = inv_model(A0)
-    # ptb_A = PerturbationLpNorm(
-    #     norm=np.inf, 
-    #     x_L=A_lb.to('cuda'),
-    #     x_U=A_ub.to('cuda'),
-    # )
-    # print(">>>>>> Starting BoundedTensor")
-    # my_input = BoundedTensor(A0, ptb_A)
-    
-    # print(">>>>>> Starting Bounded Module")
-    # model_inverse_bounded = BoundedModule(inv_model, A0, device=inv_model.device, bound_opts={'conv_mode': 'matrix'})
-    # prediction = model_inverse_bounded(my_input)
-    # model_inverse_bounded.visualize('inverse_lb')
-    # print(">>>>>> Starting Compute Bound")
-    # lb_inverse, ub_inverse = model_inverse_bounded.compute_bounds(x=(my_input, ), method='ibp')
-    # print(lb_inverse, ub_inverse)    
-
-# import numpy as np 
-# np.set_printoptions(precision=10)  
-# x0 = np.eye(2)
-# x0inv = np.linalg.inv(x0)
-# xlb = np.array([
-#     [0.8, -0.2,],
-#     [-0.2, 0.8]
-# ])
-# xub = np.array([
-#     [1.2, 0.2,],
-#     [0.2, 1.2]
-# ])
-# for i in range(1000):
-#     # x = np.array([
-#     #     [0.9,-0.1], 
-#     #     [-0.1, 1]
-#     # ])
-#     x = np.random.uniform(xlb, xub)
-#     res = np.linalg.inv(x)
-#     dx = x-x0 
-#     eps = np.linalg.norm(dx@x0inv)
-#     T = np.linalg.norm(x0inv)*eps**2/(1-eps)
-#     xl = -np.array([[
-#         [T, T/np.sqrt(2)],
-#         [T/np.sqrt(2), T],
-#     ]])+(x0inv-x0inv@dx@x0inv)
-#     xu = np.array([[
-#         [T, T/np.sqrt(2)],
-#         [T/np.sqrt(2), T],
-#     ]])+(x0inv-x0inv@dx@x0inv)
-#     # eig0,_ = np.linalg.eig(x0-dx@x0inv)
-#     # print(eig0)
-#     # if np.linalg.norm(dx@x0inv)>=1:
-#     #     print("violated assumption")
-#     # xl = x0inv-x0inv@dx@x0inv 
-#     # xu = x0inv-x0inv@dx@x0inv+x0inv@dx@x0inv@dx@x0inv
-#     if np.any(res<xl) or np.any(res>xu):
-#         print("violated")
-#         print(x)
-#         print(res) 
-#         print(xl)
-#         print(xu)
-#         eig1,_ = np.linalg.eig(xu-res)
-#         print(eig1)
-#         eig2,_ = np.linalg.eig(xl-res)
-#         print(eig2)

@@ -353,10 +353,10 @@ if __name__ == "__main__":
     prediction = model_alpha_bounded(my_input)
     # model_alpha_bounded.visualize('a')
     print(">>>>>> Starting Compute Bound")
-    required_A = defaultdict(set)
-    required_A[model_alpha_bounded.output_name[0]].add(model_alpha_bounded.input_name[0])
-    lb_alpha, ub_alpha, A_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='alpha-crown', return_A=True, needed_A_dict=required_A)
-    # lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='ibp')
+    # required_A = defaultdict(set)
+    # required_A[model_alpha_bounded.output_name[0]].add(model_alpha_bounded.input_name[0])
+    # lb_alpha, ub_alpha, A_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A)
+    lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='crown', can_skip=True)
     bounds_alpha = torch.cat((lb_alpha, ub_alpha), dim=0)
     
     empirical_alpha_lb = np.zeros(lb_alpha.shape)+1e10
@@ -375,6 +375,9 @@ if __name__ == "__main__":
         res_alpha = res_alpha.detach().cpu().numpy()
         empirical_alpha_lb = np.minimum(empirical_alpha_lb, res_alpha)
         empirical_alpha_ub = np.maximum(empirical_alpha_ub, res_alpha)
+        if np.any(res_alpha>ub_alpha) or np.any(res_alpha<lb_alpha):
+            print(i, "Bound Wrong")
+            # break
 
     diff_compemp_ub = (ub_alpha-empirical_alpha_ub)
     diff_compemp_lb = (empirical_alpha_lb-lb_alpha)
