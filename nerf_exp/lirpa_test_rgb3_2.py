@@ -370,7 +370,15 @@ if __name__ == "__main__":
     ##################### Compute Bounds #####################
     my_input = torch.clone(camera_pose)
     print(">>>>>> Starting Bounded Module")
-    model_alpha_bounded = BoundedModule(model_alpha, my_input, device=model_alpha.device, bound_opts={'conv_mode': 'matrix'})
+    model_alpha_bounded = BoundedModule(
+        model_alpha, 
+        my_input, 
+        device=model_alpha.device, 
+            bound_opts= {
+            'conv_mode': 'matrix',
+            'optimize_bound_args': {'iteration': 20},
+        }, 
+    )
     print(">>>>>> Starting PerturbationLpNorm")
     # ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     ptb_alpha = PerturbationLpNorm(
@@ -385,7 +393,7 @@ if __name__ == "__main__":
     print(">>>>>> Starting Compute Bound")
     required_A = defaultdict(set)
     required_A[model_alpha_bounded.output_name[0]].add(model_alpha_bounded.input_name[0])
-    lb_alpha, ub_alpha, A_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A)
+    lb_alpha, ub_alpha, A_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='alpha-crown', return_A=True, needed_A_dict=required_A)
     # lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='ibp')
     lb_alpha = torch.clip(lb_alpha, min=0)
     ub_alpha = torch.clip(ub_alpha, max=0.99)
@@ -407,7 +415,7 @@ if __name__ == "__main__":
     prediction = model_depth_bounded(my_input)
     required_A = defaultdict(set)
     required_A[model_depth_bounded.output_name[0]].add(model_depth_bounded.input_name[0])
-    lb_depth, ub_depth, A_depth = model_depth_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A)
+    lb_depth, ub_depth, A_depth = model_depth_bounded.compute_bounds(x=(my_input, ), method='alpha-crown', return_A=True, needed_A_dict=required_A)
     # lb_depth, ub_depth = model_depth_bounded.compute_bounds(x=(my_input, ), method='ibp')
 
     lb_depth = lb_depth.detach().cpu().numpy()    
@@ -483,6 +491,8 @@ if __name__ == "__main__":
 
     diff_compemp_ub = (ub_alpha-empirical_alpha_ub).reshape(w,h,-1)
     diff_compemp_lb = (empirical_alpha_lb-lb_alpha).reshape(w,h,-1)
+
+    tile_color_ub[:,:,1:] = 0
 
     plt.figure(1)
     plt.imshow(tile_color_lb)

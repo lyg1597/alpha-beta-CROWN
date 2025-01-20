@@ -133,40 +133,40 @@ def write_value(res: torch.Tensor, fn: str, gt: torch.Tensor = None):
 
 if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    output_folder = os.path.join(script_dir, '../../nerfstudio/outputs/gazebo5_transformed_env-1/splatfacto-env-rgb/2024-11-18_154538/')
+    output_folder = os.path.join(script_dir, '../../nerfstudio/outputs/triangular_data4/splatfacto/2025-01-19_232156')
     checkpoint = "step-000029999.ckpt"
     
     camera_pose = np.array([
-                [
-                    -0.23762398510466104,
-                    0.44276476982071006,
-                    -0.864577469234882,
-                    -2230.7194253135594
-                ],
-                [
-                    -2.9884813341042206e-16,
-                    0.8900715974578106,
-                    0.45582074480973456,
-                    358.8874872340502
-                ],
-                [
-                    0.9713572163231092,
-                    0.10831394187506413,
-                    -0.21150236001639652,
-                    -166.52500219585227
-                ],
-                [
-                    0.0,
-                    0.0,
-                    0.0,
-                    1.0
-                ]
+        [
+            0.0,
+            0.0,
+            1.0,
+            200.0
+        ],
+        [
+            0.0,
+            1.0,
+            0.0,
+           5.0
+        ],
+        [
+            -1.0,
+            0.0,
+            0.0,
+            0.0
+        ],
+        [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+        ]
     ])
 
     fn = "frames_00775_gs.png"
 
-    width=80
-    height=80
+    width=16
+    height=16
     f = 1200.0
 
     model = SplatModel(

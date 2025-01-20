@@ -135,13 +135,13 @@ class BoundInverse(Bound):
         model_inverselb_bounded = BoundedModule(model_inverse_lb, A0, device=model_inverse_lb.device, bound_opts={'conv_mode': 'matrix'})
         required_A = defaultdict(set)
         required_A[model_inverselb_bounded.output_name[0]].add(model_inverselb_bounded.input_name[0])
-        lb_inverselb, ub_inverselb, A_inverselb = model_inverselb_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A, can_skip=True)
+        lb_inverselb, ub_inverselb, A_inverselb = model_inverselb_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A)
         
         # b_inverselb, ub_inverselb = model_inverselb_bounded.compute_bounds(x=(my_input, ), method='crown')
         model_inverseub_bounded = BoundedModule(model_inverse_ub, A0, device=model_inverse_ub.device, bound_opts={'conv_mode': 'matrix'})
         required_A = defaultdict(set)
         required_A[model_inverseub_bounded.output_name[0]].add(model_inverseub_bounded.input_name[0])
-        lb_inverseub, ub_inverseub, A_inverseub = model_inverseub_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A, can_skip=True)       
+        lb_inverseub, ub_inverseub, A_inverseub = model_inverseub_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A)       
 
         lAlb: torch.Tensor = A_inverselb[model_inverselb_bounded.output_name[0]][model_inverselb_bounded.input_name[0]]['lA']
         lbiaslb: torch.Tensor = A_inverselb[model_inverselb_bounded.output_name[0]][model_inverselb_bounded.input_name[0]]['lbias']
@@ -172,9 +172,9 @@ class BoundInverse(Bound):
         my_input = BoundedTensor(A0, ptb_A)
         model_inverselb_bounded = BoundedModule(model_inverse_lb, A0, device=model_inverse_lb.device, bound_opts={'conv_mode': 'matrix'})
         # model_inverselb_bounded.visualize('inverse_lb')
-        lb_inverselb, ub_inverselb = model_inverselb_bounded.compute_bounds(x=(my_input, ), method='crown', can_skip=True)
+        lb_inverselb, ub_inverselb = model_inverselb_bounded.compute_bounds(x=(my_input, ), method='crown')
         model_inverseub_bounded = BoundedModule(model_inverse_ub, A0, device=model_inverse_ub.device, bound_opts={'conv_mode': 'matrix'})
-        lb_inverseub, ub_inverseub = model_inverseub_bounded.compute_bounds(x=(my_input, ), method='crown', can_skip=True)       
+        lb_inverseub, ub_inverseub = model_inverseub_bounded.compute_bounds(x=(my_input, ), method='crown')       
         # print(lb_inverselb, ub_inverseub)
         return Interval.make_interval(lb_inverselb, ub_inverseub) 
    

@@ -340,7 +340,15 @@ if __name__ == "__main__":
     res = model_alpha(camera_pose)
     my_input = torch.clone(camera_pose)
     print(">>>>>> Starting Bounded Module")
-    model_alpha_bounded = BoundedModule(model_alpha, my_input, device=model_alpha.device, bound_opts={'conv_mode': 'matrix'})
+    model_alpha_bounded = BoundedModule(
+        model_alpha, 
+        my_input, 
+        device=model_alpha.device, 
+            bound_opts= {
+            'conv_mode': 'matrix',
+            'optimize_bound_args': {'iteration': 20},
+        }, 
+    )
     print(">>>>>> Starting PerturbationLpNorm")
     # ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     ptb_alpha = PerturbationLpNorm(
@@ -351,12 +359,12 @@ if __name__ == "__main__":
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb_alpha)
     prediction = model_alpha_bounded(my_input)
-    # model_alpha_bounded.visualize('a')
+    model_alpha_bounded.visualize('alpha_new')
     print(">>>>>> Starting Compute Bound")
     # required_A = defaultdict(set)
     # required_A[model_alpha_bounded.output_name[0]].add(model_alpha_bounded.input_name[0])
     # lb_alpha, ub_alpha, A_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A)
-    lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='crown', can_skip=True)
+    lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='alpha-crown')
     bounds_alpha = torch.cat((lb_alpha, ub_alpha), dim=0)
     
     empirical_alpha_lb = np.zeros(lb_alpha.shape)+1e10

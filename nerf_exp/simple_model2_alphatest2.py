@@ -161,8 +161,8 @@ class AlphaModel(torch.nn.Module):
         # self.cov_world = self.cov_world.unsqueeze(0)  # Don't need an extra dimension that brings confusions
         self.tan_fovx = 0.5*self.width/self.fx 
         self.tan_fovy = 0.5*self.height/self.fy 
-        self.lim_x = torch.Tensor([1.3*self.tan_fovx]).to(self.device) 
-        self.lim_y = torch.Tensor([1.3*self.tan_fovy]).to(self.device)
+        self.lim_x = torch.Tensor([1.3*self.tan_fovx]).repeat((1,3)).to(self.device) 
+        self.lim_y = torch.Tensor([1.3*self.tan_fovy]).repeat((1,3)).to(self.device)
 
     @torch.no_grad()
     def prepare_render_coefficients(self):
@@ -219,8 +219,8 @@ class AlphaModel(torch.nn.Module):
         y = means_cam[:, :, 1]
         z_cam = means_cam[:, :, 2]
 
-        tx = z_cam*torch.min(self.lim_x, torch.max(-self.lim_x, x/z_cam))
-        ty = z_cam*torch.min(self.lim_y, torch.max(-self.lim_y, y/z_cam))
+        # tx = torch.min(z_cam*self.lim_x, torch.max(-z_cam*self.lim_x, x))
+        # ty = torch.min(z_cam*self.lim_y, torch.max(-z_cam*self.lim_y, y))
         # return ty
 
         J00 = z_cam*self.fx 
@@ -263,8 +263,6 @@ class AlphaModel(torch.nn.Module):
         #     J12 * J00 * cov_cam[:,:,2, 0] +
         #     J12 * J02 * cov_cam[:,:,2, 2]
         # )
-        cov2D00 = cov2D00
-        cov2D11 = cov2D11 
         cov2D = torch.stack([cov2D00[:,:], cov2D0110[:,:], cov2D0110[:,:], cov2D11[:,:]], dim=2).reshape((1,-1,2,2))
         conic = self.inv_op(cov2D)
         conic00 = conic[:,:,0,0]
@@ -300,8 +298,6 @@ class AlphaModel(torch.nn.Module):
             + torch.square(dx[:,:,:,1]) * conic11[:, None, :]
             + dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :]
             + dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :])
-        # return inside
-
         gauss_weight_orig = torch.exp(inside)
         alpha = gauss_weight_orig[:,:,:,None]*self.opacities_rast
         return alpha

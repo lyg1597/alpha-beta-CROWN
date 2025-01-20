@@ -1790,9 +1790,9 @@ class RasterizationModelRGB_notile(torch.nn.Module):
         ty = z_cam*torch.min(self.lim_y, torch.max(-self.lim_y, y/z_cam))
 
         J00 = self.fx / z_cam
-        J02 = -self.fx * x / z_cam**2
+        J02 = -self.fx * tx / z_cam**2
         J11 = self.fy / z_cam
-        J12 = -self.fy * y / z_cam**2
+        J12 = -self.fy * ty / z_cam**2
 
         cov2D00 = (
             J00 * J00 * cov_cam[:,:,0, 0] +

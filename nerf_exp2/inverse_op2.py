@@ -133,7 +133,7 @@ class BoundInverse(Bound):
         if self.counter%30==0 or self.stored_bounds is None or torch.any(A_lb<self.stored_inp_lb) or torch.any(A_ub>self.stored_inp_ub):
             print(f"####### Bound Backward Inverse Alpha: {self.counter}, {self.alpha_counter}")
             lb_eps, ub_eps, A_eps = model_eps_bounded.compute_bounds(
-                x=(my_input, ), method='alpha-crown', return_A=True, needed_A_dict=required_A,
+                x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A,
             )
             self.stored_bounds = A_eps 
             self.stored_inp_lb = A_lb 
@@ -160,25 +160,26 @@ class BoundInverse(Bound):
             lA = None 
             lbias = 0 
         else:
-            last_lA_tmp = last_lA.reshape((last_lA.shape[0], last_lA.shape[1], -1))
-            lA = (last_lA_tmp[:,:,:,None,None,None]*EpsAlb_const[None]).sum(2)
-
-            lfirst_term = -(lA*A0_const[None,None]).sum(dim=list(range(2, lA.ndim)))
-            lsecond_term = (last_lA_tmp*Epsbiaslb_const[None]).sum(dim=list(range(2,last_lA_tmp.ndim)))
-            lthird_term = -(last_lA*T_mat_const[None,None]).sum(dim=list(range(2,last_lA.ndim)))
-            lbias = lfirst_term+lsecond_term+lthird_term
-
+            last_lA_view = last_lA.view((last_lA.shape[0], last_lA.shape[1], -1))
+            lA = torch.einsum('ijk,jkabc->ijabc', last_lA_view, EpsAlb_const)
+            lbias = -torch.einsum("xyzuv,zuv->xy", lA, A0_const)
+            lbias = lbias+torch.einsum('ixa,xa->ix', last_lA_view, Epsbiaslb_const)
+            lbias = lbias-torch.einsum('ixabc,abc->ix', last_lA, T_mat_const)
+            
         if last_uA is None:
             uA = None 
             ubias = 0
         else:
-            last_uA_tmp = last_uA.reshape((last_uA.shape[0], last_uA.shape[1], -1))
-            uA = (last_uA_tmp[:,:,:,None,None,None]*EpsAub_const[None]).sum(2)
-
-            ufirst_term = -(uA*A0_const[None,None]).sum(dim=list(range(2, uA.ndim)))
-            usecond_term = (last_uA_tmp*Epsbiasub_const[None]).sum(dim=list(range(2,last_uA_tmp.ndim)))
-            uthird_term = (last_uA*T_mat_const[None,None]).sum(dim=list(range(2,last_uA.ndim)))
-            ubias = ufirst_term+usecond_term+uthird_term
+            last_uA_view = last_uA.view((last_uA.shape[0], last_uA.shape[1], -1))
+            uA = torch.einsum('ijk,jkabc->ijabc', last_uA_view, EpsAub_const)
+            ubias = -torch.einsum("xyzuv,zuv->xy", uA, A0_const)
+            ubias = ubias+torch.einsum('ixa,xa->ix', last_uA_view, Epsbiasub_const)
+            ubias = ubias-torch.einsum('ixabc,abc->ix', last_uA, T_mat_const)
+            
+            # ufirst_term = -(uA*A0_const[None,None]).sum(dim=list(range(2, uA.ndim)))
+            # usecond_term = (last_uA_tmp*Epsbiasub_const[None]).sum(dim=list(range(2,last_uA_tmp.ndim)))
+            # uthird_term = (last_uA*T_mat_const[None,None]).sum(dim=list(range(2,last_uA.ndim)))
+            # ubias = ufirst_term+usecond_term+uthird_term
 
         return [(lA, uA)], lbias, ubias
 

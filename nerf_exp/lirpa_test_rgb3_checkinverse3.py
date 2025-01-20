@@ -90,11 +90,23 @@ if __name__ == "__main__":
 
     A_lb = torch.Tensor([[[
         [58951.977, -2156.779],
-        [-2156.7783,  86873.53],
+        [-2156.779,  86873.53],
+    ],[
+        [96794.266, -718.9259],
+        [-718.9259,  96794.3],
+    ],[
+        [107970.2, -2156.7788],
+        [-2156.7788, 71892.664],
     ]]])
     A_ub = torch.Tensor([[[
+        [93460.44, 2156.7783],
+        [2156.7783, 130492.9]
+    ],[
         [142558.67, 718.92676],
         [718.92676, 142558.69]
+    ],[
+        [160912.1, 2156.7793],
+        [2156.7793, 104244.3],
     ]]])
     # A_lb = torch.Tensor([[[
     #     [0.9,-0.1],
@@ -119,7 +131,15 @@ if __name__ == "__main__":
         x_U = delta,  
     )
     my_input = BoundedTensor(delta0, ptb_A)
-    model_bounded = BoundedModule(modeleps, delta0, device = 'cpu', bound_opts={'conv_mode': 'matrix'})
+    model_bounded = BoundedModule(
+        modeleps, 
+        delta0, 
+        device = 'cpu', 
+        bound_opts={
+            'conv_mode': 'matrix', 
+            'optimize_bound_args': {'iteration': 10}
+        }
+    )
     prediction = model_bounded(my_input)
     model_bounded.visualize('inverse_new')
     

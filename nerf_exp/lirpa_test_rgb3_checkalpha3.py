@@ -1,7 +1,7 @@
 import torch 
 import numpy as np 
 from scipy.spatial.transform import Rotation
-from simple_model2_alphatest2 import AlphaModel, DepthModel
+from simple_model2_alphatest3 import AlphaModel
 import matplotlib.pyplot as plt 
 import pyvista as pv
 from typing import List, Dict
@@ -292,9 +292,9 @@ if __name__ == "__main__":
     # Setup Opacities of three gaussian, all between 0.5-0.8 (relatively opaque)
     # opacities = np.random.uniform(0.5, 0.8, (1,N,1))
     opacities = np.array([
-        [0.3],
-        [0.3],
-        [0.3]
+        [0.6],
+        [0.6],
+        [0.6]
     ])
     # Setup colors of three gaussian, basically r,g,b if N=3 and r,g,b,y,p,o if N=6
     if N==3:
@@ -319,20 +319,6 @@ if __name__ == "__main__":
     quats = Rotation.from_euler('xyz', rpys).as_quat() # x,y,z,w
     quats = np.hstack((quats[:,3:4], quats[:,0:1], quats[:,1:2], quats[:,2:3]))
     
-    matrices = Rotation.from_euler('xyz', rpys).as_matrix()
-    # quats = np.expand_dims(quats, axis=0)
-
-    covs = []
-    for i in range(scales.shape[0]):
-        scale = np.exp(scales[i])
-        scale_matrix = np.diag(scale)
-        M = matrices[i]@scale_matrix
-        cov = M@M.T
-        covs.append(cov)
-    covs = np.array(covs)
-
-    visualize_scene(means, covs, colors.cpu().numpy(), opacities)
-
     data_pack = {
         'opacities': torch.FloatTensor(opacities),
         'means': torch.FloatTensor(means),
@@ -348,26 +334,10 @@ if __name__ == "__main__":
         height=h,
     )
     print("###### Model Alpha")
-
-    model_depth = DepthModel(model_alpha)
-    print("###### Model Depth")
-
-    res_alpha = model_alpha(camera_pose)
-    print("###### Alpha")
-    res_depth = model_depth(camera_pose)
-    print("###### Depth")
-    depth_order = torch.argsort(res_depth, dim=1).squeeze()
-    sorted_alpha = res_alpha[0,:,depth_order,:]
-    sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
-    sorted_color = colors[depth_order,:]
-    rgb_color = (sorted_T * sorted_alpha * sorted_color[None]).sum(dim=1)
-    rgb_color = rgb_color.reshape(w, h, -1)[:,:,:3]
-    rgb_color = rgb_color.detach().cpu().numpy()
-    plt.figure(0)
-    plt.imshow(rgb_color)
-    plt.show()
+    # torch.onnx.export(model_alpha, camera_pose, 'model.onnx') 
 
     ##################### Compute Bounds #####################
+    res = model_alpha(camera_pose)
     my_input = torch.clone(camera_pose)
     print(">>>>>> Starting Bounded Module")
     model_alpha_bounded = BoundedModule(
@@ -383,139 +353,60 @@ if __name__ == "__main__":
     # ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     ptb_alpha = PerturbationLpNorm(
         norm=np.inf, 
-        x_L=torch.Tensor([[-0.0,-0.0,-0.0,-1e-5,-1e-5,-1e-5]]).to(model_alpha.device),
-        x_U=torch.Tensor([[0.0,0.0,0.0,1e-5,1e-5,1e-5]]).to(model_alpha.device),
+        x_L=torch.Tensor([[-0.0,-0.0,-0.0,-1.0,-1.0,-1.0]]).to(model_alpha.device),
+        x_U=torch.Tensor([[0.0,0.0,0.0,1.0,1.0,1.0]]).to(model_alpha.device),
     )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb_alpha)
     prediction = model_alpha_bounded(my_input)
-    model_alpha_bounded.visualize('alpha')
+    model_alpha_bounded.visualize('alpha_new')
     print(">>>>>> Starting Compute Bound")
-    required_A = defaultdict(set)
-    required_A[model_alpha_bounded.output_name[0]].add(model_alpha_bounded.input_name[0])
+    # required_A = defaultdict(set)
+    # required_A[model_alpha_bounded.output_name[0]].add(model_alpha_bounded.input_name[0])
     # lb_alpha, ub_alpha, A_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A)
-    lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='ibp')
-    lb_alpha = torch.clip(lb_alpha, min=0)
-    ub_alpha = torch.clip(ub_alpha, max=0.99)
+    lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(
+        x=(my_input, ), 
+        method='alpha-crown',
+    )
     bounds_alpha = torch.cat((lb_alpha, ub_alpha), dim=0)
     
-    model_depth = DepthModel(model_alpha)
-    my_input = torch.clone(camera_pose)
-    print(">>>>>> Starting Bounded Module")
-    model_depth_bounded = BoundedModule(model_depth, my_input, device=model_depth.device, bound_opts={'conv_mode': 'matrix'})
-    print(">>>>>> Starting PerturbationLpNorm")
-    # ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
-    ptb_depth = PerturbationLpNorm(
-        norm=np.inf, 
-        x_L=torch.Tensor([[-0.0,-0.0,-0.0,-1.0,-1.0,-1.0]]).to(model_depth.device),
-        x_U=torch.Tensor([[0.0,0.0,0.0,1.0,1.0,1.0]]).to(model_depth.device),
-    )
-    print(">>>>>> Starting BoundedTensor")
-    my_input = BoundedTensor(my_input, ptb_depth)
-    prediction = model_depth_bounded(my_input)
-    required_A = defaultdict(set)
-    required_A[model_depth_bounded.output_name[0]].add(model_depth_bounded.input_name[0])
-    lb_depth, ub_depth, A_depth = model_depth_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A)
-    # lb_depth, ub_depth = model_depth_bounded.compute_bounds(x=(my_input, ), method='ibp')
-
-    lb_depth = lb_depth.detach().cpu().numpy()    
-    ub_depth = ub_depth.detach().cpu().numpy()    
-    bounds_depth = np.vstack((lb_depth, ub_depth)).T
-    bounds_depth = bounds_depth.tolist()
-    bounds_depth = [elem+[i] for i, elem in enumerate(bounds_depth)]
-    sorted_bounds = sort_bounds(bounds_depth)
-
-    # concrete_before, possible_before = get_elem_before(bounds_depth)
-    concrete_before, possible_before = get_elem_before_linear(ptb_depth, A_depth, model_depth_bounded)
-    print(concrete_before, possible_before)
-    res_T = computeT(concrete_before, possible_before, bounds_alpha)
-    
-    res_2d = colors
-    bounds_res_2d = torch.stack((res_2d, res_2d), dim=0)
-    bounds_res_2d = bounds_res_2d[:,None]
-    tile_color = (res_T*bounds_alpha*bounds_res_2d).sum(dim=2)
-    
-    set_order = get_set_order(sorted_bounds)
-    set_sorted_alpha = apply_set_order(set_order, bounds_alpha)
-    set_sorted_T = compute_sortedT(set_sorted_alpha)
-    bounds_res_2d = torch.stack((colors, colors), dim=0)
-    bounds_res_2d = bounds_res_2d[:,None]
-    bounds_alphac = bounds_alpha*bounds_res_2d
-    set_sorted_alphac = apply_set_order(set_order, bounds_alphac)
-    tile_color_old = (set_sorted_T*bounds_alphac).sum(dim=2)
-    diff = torch.abs(tile_color-tile_color_old).sum(dim=2)
-
-    tile_color_lb = tile_color[0,:,:3].reshape((w,h,-1))
-    tile_color_lb = tile_color_lb.detach().cpu().numpy()
-    tile_color_ub = tile_color[1,:,:3].reshape((w,h,-1))
-    tile_color_ub = tile_color_ub.detach().cpu().numpy()
-    diff_lb = diff[0,:].reshape((w,h,-1))
-    diff_lb = diff_lb.detach().cpu().numpy()
-    diff_ub = diff[1,:].reshape((w,h,-1))
-    diff_ub = diff_ub.detach().cpu().numpy()
-
-    empirical_lb = np.zeros(tile_color_lb.shape)+1e10
-    empirical_ub = np.zeros(tile_color_lb.shape)
     empirical_alpha_lb = np.zeros(lb_alpha.shape)+1e10
-    empirical_alpha_ub = np.zeros(ub_alpha.shape)
+    empirical_alpha_ub = np.zeros(ub_alpha.shape)-1e10
     lb_alpha = lb_alpha.detach().cpu().numpy()
     ub_alpha = ub_alpha.detach().cpu().numpy()
-    for i in range(1000):
+    for i in range(10000):
         tmp_input = my_input.repeat(1,1)
         delta = torch.zeros((1,6))
         # delta[:,:3,3] = torch.rand((1,3))*eps*2-eps
         delta[:,:3] = torch.rand((1,3))*0.0*2-0.0
         delta[:,3:] = torch.rand((1,3))*1.0*2-1.0
-        delta = delta.to(model_depth.device)
+        delta = delta.to(model_alpha.device)
         tmp_input = tmp_input+delta 
         res_alpha = model_alpha(tmp_input)
-        res_depth = model_depth(tmp_input)
-        depth_order = torch.argsort(res_depth, dim=1).squeeze()
-        sorted_alpha = res_alpha[0,:,depth_order,:]
-        sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
-        sorted_color = colors[depth_order,:]
-        alphac = res_alpha[0]*colors[None]
-        sorted_alphac = alphac[:,depth_order]
-        rgb_color = (sorted_T * sorted_alphac).sum(dim=1)
         res_alpha = res_alpha.detach().cpu().numpy()
         empirical_alpha_lb = np.minimum(empirical_alpha_lb, res_alpha)
         empirical_alpha_ub = np.maximum(empirical_alpha_ub, res_alpha)
-        rgb_color = rgb_color.reshape(w, h, -1)[:,:,:3]
-        rgb_color = rgb_color.detach().cpu().numpy()
-        empirical_lb = np.minimum(empirical_lb, rgb_color)
-        empirical_ub = np.maximum(empirical_ub, rgb_color)
-        valid_bound = np.all(rgb_color>=tile_color_lb) and np.all(rgb_color<=tile_color_ub)
-        if not valid_bound:
-            print("Bound Violated")
-            break
+        if np.any(res_alpha>ub_alpha) or np.any(res_alpha<lb_alpha):
+            print(i, "Bound Wrong")
+            # break
 
-    diff_compemp_ub = (ub_alpha-empirical_alpha_ub).reshape(w,h,-1)
-    diff_compemp_lb = (empirical_alpha_lb-lb_alpha).reshape(w,h,-1)
+    diff_compemp_ub = (ub_alpha-empirical_alpha_ub)
+    diff_compemp_lb = (empirical_alpha_lb-lb_alpha)
 
-    tile_color_ub[:,:,1:] = 0
+    print(res)
+    print(lb_alpha, ub_alpha)
+    print(empirical_alpha_lb, empirical_alpha_ub)
+    print(np.min(lb_alpha))
+    print(np.max(ub_alpha))
+    print(np.min(empirical_alpha_lb))
+    print(np.max(empirical_alpha_ub))
+    print(np.max(diff_compemp_lb), np.max(diff_compemp_ub))
+    print(np.argmax(diff_compemp_lb), np.argmax(diff_compemp_ub))
 
-    plt.figure(1)
-    plt.imshow(tile_color_lb)
-    plt.title("computed lb alpha-crown")
-    plt.figure(2)
-    plt.imshow(tile_color_ub)
-    plt.title("computed ub alpha-crown handle 0")
-    plt.figure(3)
-    plt.imshow(empirical_lb)
-    plt.title("empirical lb")
-    plt.figure(4)
-    plt.imshow(empirical_ub)
-    plt.title("empirical ub")
-    plt.figure(5)
-    plt.imshow(diff_lb)
-    plt.title("diff_lb")
-    plt.figure(6)
-    plt.imshow(diff_ub)
-    plt.title("diff_ub")
-    plt.figure(7)
-    plt.imshow(diff_compemp_lb)
-    plt.title('diff_comp_emp_lb')
-    plt.figure(8)
-    plt.imshow(diff_compemp_ub)
-    plt.title('diff_comp_emp_ub')
-    plt.show()
+    # plt.figure(7)
+    # plt.imshow(diff_compemp_lb)
+    # plt.title('diff_comp_emp_lb')
+    # plt.figure(8)
+    # plt.imshow(diff_compemp_ub)
+    # plt.title('diff_comp_emp_ub')
+    # plt.show()
