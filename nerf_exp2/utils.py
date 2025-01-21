@@ -114,32 +114,39 @@ def get_bound_depth_step(
     uA_diff = uA[:,:,None]-lA[:,None,:]
     lbias_diff = lbias[:,:,None]-ubias[:,None,:]
     ubias_diff = ubias[:,:,None]-lbias[:,None,:]
-    mask = torch.ones(lA_diff.shape[1], lA_diff.shape[1], device=lA_diff.device)
-    mask.fill_diagonal_(0)
-    lA_diff = lA_diff*mask[None,:,:,None]
-    uA_diff = uA_diff*mask[None,:,:,None]
-    lbias_diff = lbias_diff*mask[None]
-    ubias_diff = lbias_diff*mask[None]
+    # mask = torch.ones(lA_diff.shape[1], lA_diff.shape[1], device=lA_diff.device)
+    # mask.fill_diagonal_(0)
+    # lA_diff = lA_diff*mask[None,:,:,None]
+    # uA_diff = uA_diff*mask[None,:,:,None]
+    # lbias_diff = lbias_diff*mask[None]
+    # ubias_diff = lbias_diff*mask[None]
 
-    # diffL_part, _ = linear_bounds(lA_diff, lbias_diff, x_L, x_U)
-    # _, diffU_part = linear_bounds(uA_diff, ubias_diff, x_L, x_U)
+    diffL_part, _ = linear_bounds(lA_diff, lbias_diff, x_L, x_U)
+    _, diffU_part = linear_bounds(uA_diff, ubias_diff, x_L, x_U)
+    diffL = torch.minimum(diffL_part, diffU_part)
+    diffU = torch.maximum(diffL_part, diffU_part)
 
-    x_bounds = torch.cat((x_L, x_U), dim=0)
-    x_bounds_list = x_bounds.transpose(0,1).detach().cpu().numpy().tolist()
-    all_combins = list(itertools.product(*x_bounds_list))
-    all_combins = torch.Tensor(all_combins).transpose(0,1).to(lA.device)
+    # x_bounds = torch.cat((x_L, x_U), dim=0)
+    # x_bounds_list = x_bounds.transpose(0,1).detach().cpu().numpy().tolist()
+    # all_combins = list(itertools.product(*x_bounds_list))
+    # all_combins = torch.Tensor(all_combins).transpose(0,1).to(lA.device)
 
-    diffL_tmp = (torch.einsum('ijkl,lm->ijkm',lA_diff,all_combins)+lbias_diff[:,:,:,None]).min(dim=3).values
-    diffU_tmp = (torch.einsum('ijkl,lm->ijkm',uA_diff,all_combins)+ubias_diff[:,:,:,None]).max(dim=3).values
+    # diffL_tmp = (torch.einsum('ijkl,lm->ijkm',lA_diff,all_combins)+lbias_diff[:,:,:,None]).min(dim=3).values
+    # diffU_tmp = (torch.einsum('ijkl,lm->ijkm',uA_diff,all_combins)+ubias_diff[:,:,:,None]).max(dim=3).values
 
-    yL = (torch.einsum('ijl,lm->ijm', lA, all_combins)+lbias[:,:,None]).min(dim=2).values
-    yU = (torch.einsum('ijl,lm->ijm', uA, all_combins)+ubias[:,:,None]).max(dim=2).values
+    # yL = (torch.einsum('ijl,lm->ijm', lA, all_combins)+lbias[:,:,None]).min(dim=2).values
+    # yU = (torch.einsum('ijl,lm->ijm', uA, all_combins)+ubias[:,:,None]).max(dim=2).values
 
     # diffL_part = torch.round(diffL_part, decimals=8)
     # diffU_part = torch.round(diffU_part, decimals=8)
 
-    diffL_part = yL[:,:,None]-yU[:,None,:]
-    diffU_part = yU[:,:,None]-yL[:,None,:]
+    # diffL_part = yL[:,:,None]-yU[:,None,:]
+    # diffU_part = yU[:,:,None]-yL[:,None,:]
+
+    mask = torch.ones(diffL.shape[1], diffL.shape[1], device=diffL.device)
+    mask.fill_diagonal_(0)
+    diffL = diffL*mask[None]
+    diffU = diffU*mask[None]
 
     # step_L = torch.zeros(diffL_part.shape)
     # step_U = torch.ones(diffU_part.shape)
@@ -149,13 +156,13 @@ def get_bound_depth_step(
     # zero_mask = diffL_part>0
     # step_L[zero_mask] = 0
     # step_U[zero_mask] = 0 
-    assert torch.all(diffL_part<=diffU_part)
+    assert torch.all(diffL<=diffU)
 
-    step_L = torch.zeros(diffL_part.shape)
-    mask_L = diffL_part>0
+    step_L = torch.zeros(diffL.shape)
+    mask_L = diffL>0
     step_L[mask_L] = 1.0 
-    step_U = torch.ones(diffU_part.shape)
-    mask_U = diffU_part<=0
+    step_U = torch.ones(diffU.shape)
+    mask_U = diffU<=0
     step_U[mask_U] = 0.0
 
     return step_L, step_U

@@ -105,7 +105,7 @@ def compute_tile_color(
         inp_alpha = BoundedTensor(inp_alpha, ptb_alpha)
         prediction = model_alpha_bounded(inp_alpha)
         tmp = time.time()
-        lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(inp_alpha, ), method='ibp')
+        lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(inp_alpha, ), method='crown')
         print(f'time for compute bound {time.time()-tmp}')
         # bounds_alpha = torch.cat((lb_alpha, ub_alpha), dim=0)
         overall_alpha_lb = torch.cat((overall_alpha_lb, lb_alpha), dim=2)
@@ -136,14 +136,14 @@ def compute_tile_color(
         overall_depth_ubias = torch.cat((overall_depth_ubias, depth_ubias), dim=1)
 
     bounds_alpha = torch.cat((overall_alpha_lb, overall_alpha_ub), dim=0)
-    # concrete_before, possible_before = get_elem_before_linear(
-    #     ptb_depth, 
-    #     overall_depth_lA, 
-    #     overall_depth_uA, 
-    #     overall_depth_lbias, 
-    #     overall_depth_ubias, 
-    # )
-    # res_T = computeT(concrete_before, possible_before, bounds_alpha)
+    concrete_before, possible_before = get_elem_before_linear(
+        ptb_depth, 
+        overall_depth_lA, 
+        overall_depth_uA, 
+        overall_depth_lbias, 
+        overall_depth_ubias, 
+    )
+    res_T = computeT(concrete_before, possible_before, bounds_alpha)
     step_L, step_U = get_bound_depth_step(
         ptb_depth,
         overall_depth_lA,
@@ -237,9 +237,9 @@ if __name__ == "__main__":
     height=96
     f = 120
 
-    eps = 0.00001
-    tile_size = 4
-    gauss_step = 2000
+    eps = torch.Tensor([[0,0,0,0.00001,0.00001,0.00001]]).to('cuda')
+    tile_size = 2
+    gauss_step = 100
 
     # camera_to_worlds = torch.Tensor(camera_pose)[None].to(means.device)
     camera_to_world = [
@@ -327,6 +327,8 @@ if __name__ == "__main__":
         for w in range(0, width, tile_size):
             # if h<20:
             #     continue
+            if h!=20 or w!=80:
+                continue
             over_tl = rect[0][..., 0].clip(min=w), rect[0][..., 1].clip(min=h)
             over_br = rect[1][..., 0].clip(max=w+tile_size-1), rect[1][..., 1].clip(max=h+tile_size-1)
             in_mask = (over_br[0] > over_tl[0]) & (over_br[1] > over_tl[1])
