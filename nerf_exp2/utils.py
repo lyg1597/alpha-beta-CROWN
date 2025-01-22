@@ -46,12 +46,16 @@ def get_rect_set(
     width,
     height,
 ):
-    model_mean = MeanModel(means, scales, quats, fx, fy, width, height)
+    means_strip = means[:10000]
+    scales_strip = scales[:10000]
+    quats_strip = quats[:10000]
+    
     inp_mean = torch.clone((x_L+x_U)/2)
+    model_mean = MeanModel(means_strip, scales_strip, quats_strip, fx, fy, width, height)
     model_mean_bounded = BoundedModule(model_mean, inp_mean, device = means.device)
     ptb_mean = PerturbationLpNorm(norm=np.inf, x_L=x_L, x_U=x_U)
     inp_mean = BoundedTensor(inp_mean, ptb_mean)
-    lb_mean, ub_mean = model_mean_bounded.compute_bounds(x=(inp_mean, ), method='ibp')
+    lb_mean, ub_mean = model_mean_bounded.compute_bounds(x=(inp_mean, ), method='alpha-crown')
 
     lb_mean = lb_mean.squeeze()
     ub_mean = ub_mean.squeeze()

@@ -128,26 +128,20 @@ class BoundInverse(Bound):
         )
         required_A = defaultdict(set)
         required_A[model_eps_bounded.output_name[0]].add(model_eps_bounded.input_name[0])
-        with torch.no_grad():
-            lb_eps, ub_eps, A_eps = model_eps_bounded.compute_bounds(
-                x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A,
-            )
+        # with torch.no_grad():
         # if True:
-        # if self.counter%30==0 or self.stored_bounds is None or torch.any(A_lb<self.stored_inp_lb) or torch.any(A_ub>self.stored_inp_ub):
-        #     print(f"####### Bound Backward Inverse Alpha: {self.counter}, {self.alpha_counter}")
-        #     lb_eps, ub_eps, A_eps = model_eps_bounded.compute_bounds(
-        #         x=(my_input, ), 
-        #         method='alpha-crown', 
-        #         return_A=True, 
-        #         needed_A_dict=required_A,
-        #     )
-        #     self.stored_bounds = A_eps 
-        #     self.stored_inp_lb = A_lb 
-        #     self.stored_inp_ub = A_ub
-        #     self.alpha_counter+= 1
-        # else:
-        #     print(f"####### Bound Backward Inverse: {self.counter}, {self.alpha_counter}")
-        #     A_eps = self.stored_bounds
+        if self.counter%30==0 or self.stored_bounds is None or torch.any(A_lb<self.stored_inp_lb) or torch.any(A_ub>self.stored_inp_ub):
+            print(f"####### Bound Backward Inverse Alpha: {self.counter}, {self.alpha_counter}")
+            lb_eps, ub_eps, A_eps = model_eps_bounded.compute_bounds(
+                x=(my_input, ), method='alpha-crown', return_A=True, needed_A_dict=required_A,
+            )
+            self.stored_bounds = A_eps 
+            self.stored_inp_lb = A_lb 
+            self.stored_inp_ub = A_ub
+            self.alpha_counter+= 1
+        else:
+            print(f"####### Bound Backward Inverse: {self.counter}, {self.alpha_counter}")
+            A_eps = self.stored_bounds
         self.counter += 1 
         EpsAlb: torch.Tensor = A_eps[model_eps_bounded.output_name[0]][model_eps_bounded.input_name[0]]['lA']
         Epsbiaslb: torch.Tensor = A_eps[model_eps_bounded.output_name[0]][model_eps_bounded.input_name[0]]['lbias']
@@ -158,7 +152,7 @@ class BoundInverse(Bound):
         EpsAub_const = EpsAub.clone().detach()
         Epsbiasub_const = Epsbiasub.clone().detach()
 
-        A0 = A0.squeeze(0)
+        A0 = A0.squeeze()
         A0_const = A0.clone().detach()
         T_mat_const = T_mat.clone().detach()
 
@@ -167,25 +161,20 @@ class BoundInverse(Bound):
             lbias = 0 
         else:
             last_lA_view = last_lA.view((last_lA.shape[0], last_lA.shape[1], -1))
-            lA = torch.einsum('ijk,jkabc->ijabc', last_lA_view, EpsAlb_const)
-            lbias = -torch.einsum("xyzuv,zuv->xy", lA, A0_const)
+            lA = torch.einsum('ijk,jkab->ijab', last_lA_view, EpsAlb_const)
+            lbias = -torch.einsum("xyuv,uv->xy", lA, A0_const)
             lbias = lbias+torch.einsum('ixa,xa->ix', last_lA_view, Epsbiaslb_const)
-            lbias = lbias-torch.einsum('ixabc,abc->ix', last_lA, T_mat_const)
-            
+            lbias = lbias-torch.einsum('ixab,xab->ix', last_lA, T_mat_const)
+
         if last_uA is None:
             uA = None 
             ubias = 0
         else:
             last_uA_view = last_uA.view((last_uA.shape[0], last_uA.shape[1], -1))
-            uA = torch.einsum('ijk,jkabc->ijabc', last_uA_view, EpsAub_const)
-            ubias = -torch.einsum("xyzuv,zuv->xy", uA, A0_const)
+            uA = torch.einsum('ijk,jkab->ijab', last_uA_view, EpsAub_const)
+            ubias = -torch.einsum("xyuv,uv->xy", uA, A0_const)
             ubias = ubias+torch.einsum('ixa,xa->ix', last_uA_view, Epsbiasub_const)
-            ubias = ubias-torch.einsum('ixabc,abc->ix', last_uA, T_mat_const)
-            
-            # ufirst_term = -(uA*A0_const[None,None]).sum(dim=list(range(2, uA.ndim)))
-            # usecond_term = (last_uA_tmp*Epsbiasub_const[None]).sum(dim=list(range(2,last_uA_tmp.ndim)))
-            # uthird_term = (last_uA*T_mat_const[None,None]).sum(dim=list(range(2,last_uA.ndim)))
-            # ubias = ufirst_term+usecond_term+uthird_term
+            ubias = ubias-torch.einsum('ixab,xab->ix', last_uA, T_mat_const)
 
         return [(lA, uA)], lbias, ubias
 
@@ -243,34 +232,42 @@ if __name__ == "__main__":
 
         def forward(self, x):
             # res = x
-            res = x*self.const
+            # res = x*self.const
             # res = torch.pow(x,3)
             res = self.inv_op(x)
             # res = res-1
-            res = res*self.const
+            # res = res*self.const
             # res = torch.abs(res)
             return res    
 
-    A_lb = torch.Tensor([[[
-        [58951.977, -2156.779],
-        [-2156.779,  86873.53],
-    ],[
-        [96794.266, -718.9259],
-        [-718.9259,  96794.3],
-    ],[
-        [107970.2, -2156.7788],
-        [-2156.7788, 71892.664],
-    ]]]).to('cuda')
-    A_ub = torch.Tensor([[[
-        [93460.44, 2156.7783],
-        [2156.7783, 130492.9]
-    ],[
-        [142558.67, 718.92676],
-        [718.92676, 142558.69]
-    ],[
-        [160912.1, 2156.7793],
-        [2156.7793, 104244.3],
-    ]]]).to('cuda')
+    # A_lb = torch.Tensor([[[
+    #     [58951.977, -2156.779],
+    #     [-2156.779,  86873.53],
+    # ],[
+    #     [96794.266, -718.9259],
+    #     [-718.9259,  96794.3],
+    # ],[
+    #     [107970.2, -2156.7788],
+    #     [-2156.7788, 71892.664],
+    # ]]]).to('cuda')
+    # A_ub = torch.Tensor([[[
+    #     [93460.44, 2156.7783],
+    #     [2156.7783, 130492.9]
+    # ],[
+    #     [142558.67, 718.92676],
+    #     [718.92676, 142558.69]
+    # ],[
+    #     [160912.1, 2156.7793],
+    #     [2156.7793, 104244.3],
+    # ]]]).to('cuda')
+    A_lb = torch.Tensor([[
+        [0.9, -0.1],
+        [-0.1, 0.9],
+    ]]).to('cuda')
+    A_ub = torch.Tensor([[
+        [1.1, 0.1],
+        [0.1, 1.1],
+    ]]).to('cuda')
     
     # A_lb = torch.Tensor([[[
     #     [58951.977, -2156.779],
