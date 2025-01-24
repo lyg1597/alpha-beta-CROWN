@@ -7,13 +7,14 @@ from simple_model2_alphatest2 import AlphaModel, DepthModel
 from rasterization_pytorch import rasterize_gaussians_pytorch_rgb
 from scipy.spatial.transform import Rotation 
 from collections import defaultdict
-from utils import get_rect_set, \
+from img_helper import get_rect_set, \
     get_viewmat, \
     get_bound_depth_step, \
     computeT_new, \
     computeT_new_optimized, \
     computeT, \
-    get_elem_before_linear
+    get_elem_before_linear, \
+    computeT_new_new
 import time 
 
 dt = {
@@ -115,7 +116,7 @@ def compute_tile_color(
         inp_alpha = BoundedTensor(inp_alpha, ptb_alpha)
         # prediction = model_alpha_bounded(inp_alpha)
         # tmp = time.time()
-        lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(inp_alpha, ), method='crown')
+        lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(inp_alpha, ), method='ibp')
         # print(f'time for compute bound {time.time()-tmp}')
         # bounds_alpha = torch.cat((lb_alpha, ub_alpha), dim=0)
         overall_alpha_lb = torch.cat((overall_alpha_lb, lb_alpha), dim=2)
@@ -154,6 +155,20 @@ def compute_tile_color(
     #     overall_depth_ubias, 
     # )
     # res_T = computeT(concrete_before, possible_before, bounds_alpha)
+    # # print(f"time for compute step bound {time.time()-tmp}")
+    # # tmp = time.time()
+    # # res_Tl = computeT_new(overall_alpha_ub, step_U)
+    # res_Tu = computeT_new(overall_alpha_lb, step_L)
+    # print(f"time for compute T bound{time.time()-tmp}")
+    # res_TL = (torch.ones((1,1,1,1)).to(overall_alpha_ub.device)-overall_alpha_ub*step_U[:,None].to(overall_alpha_ub.device)).prod(dim=3)
+    nan_mask = torch.any(torch.isnan(bounds_alpha),dim=(0,1,3))
+    inf_mask = torch.any(torch.isinf(bounds_alpha),dim=(0,1,3))
+    mask = ~(nan_mask | inf_mask) 
+    bounds_alpha = bounds_alpha[:,:,mask,:]
+    overall_depth_lA = overall_depth_lA[:,mask,:]
+    overall_depth_uA = overall_depth_uA[:,mask,:]
+    overall_depth_lbias = overall_depth_lbias[:,mask]
+    overall_depth_ubias = overall_depth_ubias[:,mask]
     step_L, step_U = get_bound_depth_step(
         ptb_depth,
         overall_depth_lA,
@@ -161,16 +176,21 @@ def compute_tile_color(
         overall_depth_lbias,
         overall_depth_ubias,
     )
-    # print(f"time for compute step bound {time.time()-tmp}")
-    # tmp = time.time()
-    # res_Tl = computeT_new(overall_alpha_ub, step_U)
     tmp_res_Tl = computeT_new_optimized(overall_alpha_ub, step_U)
     tmp_res_Tu = computeT_new_optimized(overall_alpha_lb, step_L)
-    # res_Tu = computeT_new(overall_alpha_lb, step_L)
-    # print(f"time for compute T bound{time.time()-tmp}")
-    # res_TL = (torch.ones((1,1,1,1)).to(overall_alpha_ub.device)-overall_alpha_ub*step_U[:,None].to(overall_alpha_ub.device)).prod(dim=3)
+    
+    # tmp_res_Tl, tmp_res_Tu = computeT_new_new(
+    #     ptb_depth,
+    #     overall_depth_lA,
+    #     overall_depth_uA,
+    #     overall_depth_lbias,
+    #     overall_depth_ubias,
+    #     bounds_alpha[0:1],
+    #     bounds_alpha[1:2],
+    # )
     res_T = torch.cat((tmp_res_Tl, tmp_res_Tu), dim=0)
     # res_T = computeT(concrete_before, possible_before, bounds_alpha)
+    colors_strip = colors_strip[mask]
     bounds_colors = torch.stack((colors_strip, colors_strip), dim=0)
     bounds_colors = bounds_colors[:,None]
     tile_color = (res_T*bounds_alpha*bounds_colors).sum(dim=2)
@@ -201,7 +221,13 @@ if __name__ == "__main__":
 
     # Filter unnecessary gaussians 
     # color_mask = torch.norm(colors, dim=1)>0.1
-    # means_trans = torch.inverse(torch.tensor(transform_ap).to(means.device))@means.transpose(0,1)/scale
+    # means_hom = torch.cat((means, torch.ones((means.shape[0],1)).to(means.device)), dim=1)
+    # means_trans = torch.inverse(torch.tensor(transform_ap, dtype=means.dtype).to(means.device))@means_hom.transpose(0,1)/scale
+    # means_trans = means_trans.transpose(0,1)
+    # means_mask = (means_trans[:,0]>-40) & (means_trans[:,0]<200) &\
+    #              (means_trans[:,1]>-40) & (means_trans[:,1]<40) &\
+    #              (means_trans[:,2]>-20) & (means_trans[:,2]<40)
+    # mask = color_mask and means_mask
 
     # means = means[color_mask,:]
     # quats = quats[color_mask,:]
@@ -247,9 +273,9 @@ if __name__ == "__main__":
     height=48
     f = 80
 
-    eps = torch.Tensor([[0,0,0,0.0001,0.0001,0.0001]]).to(means.device)
-    tile_size = 1
-    gauss_step = 400*2
+    eps = torch.Tensor([[0,0,0,0.00001,0.00001,0.00001]]).to(means.device)
+    tile_size = 4
+    gauss_step = 4000
 
     # camera_to_worlds = torch.Tensor(camera_pose)[None].to(means.device)
     camera_to_world = torch.Tensor(camera_pose_transformed)[None].to(means.device)
@@ -291,7 +317,7 @@ if __name__ == "__main__":
     res_rgb = res_rgb.detach().cpu().numpy()
     plt.figure(0)
     plt.imshow(res_rgb)
-    plt.show()
+    # plt.show()
 
     # Get all the pix_coord 
     pix_coord = torch.stack(torch.meshgrid(torch.arange(width), torch.arange(height), indexing='xy'), dim=-1).to(means.device)
@@ -316,8 +342,8 @@ if __name__ == "__main__":
     colors = colors[mask]
     for h in range(0, height, tile_size):
         for w in range(0, width, tile_size):
-            # if h!=1 or w!=32:
-            #     continue
+            if h!=16 or w!=4:
+                continue
             # if h>24:
             #     continue
             over_tl = rect[0][..., 0].clip(min=w), rect[0][..., 1].clip(min=h)

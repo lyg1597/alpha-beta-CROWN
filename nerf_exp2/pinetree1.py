@@ -11,7 +11,7 @@ from typing import List, Dict
 from scipy.spatial.transform import Rotation 
 from collections import defaultdict
 import itertools
-from utils import get_rect_set 
+from img_helper import get_rect_set 
 
 dt = {
     "transform": [

@@ -394,7 +394,7 @@ if __name__ == "__main__":
     required_A = defaultdict(set)
     required_A[model_alpha_bounded.output_name[0]].add(model_alpha_bounded.input_name[0])
     # lb_alpha, ub_alpha, A_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A)
-    lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='ibp')
+    lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='crown')
     lb_alpha = torch.clip(lb_alpha, min=0)
     ub_alpha = torch.clip(ub_alpha, max=0.99)
     bounds_alpha = torch.cat((lb_alpha, ub_alpha), dim=0)

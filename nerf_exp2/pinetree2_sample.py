@@ -11,7 +11,7 @@ from typing import List, Dict
 from scipy.spatial.transform import Rotation 
 from collections import defaultdict
 import itertools
-from utils import get_rect 
+from img_helper import get_rect 
 
 dt = {
     "transform": [
@@ -212,15 +212,17 @@ if __name__ == "__main__":
     scales = res['pipeline']['_model.gauss_params.scales']
     colors = torch.sigmoid(res['pipeline']['_model.gauss_params.features_dc'])
 
+    scale_mask = torch.all(scales>-7.5, dim=1)
+
     # Filter unnecessary gaussians 
     # color_mask = torch.norm(colors, dim=1)>0.1
     # means_trans = torch.inverse(torch.tensor(transform_ap).to(means.device))@means.transpose(0,1)/scale
 
-    # means = means[color_mask,:]
-    # quats = quats[color_mask,:]
-    # opacities = opacities[color_mask,:]
-    # scales = scales[color_mask,:]
-    # colors = colors[color_mask,:]
+    means = means[scale_mask,:]
+    quats = quats[scale_mask,:]
+    opacities = opacities[scale_mask,:]
+    scales = scales[scale_mask,:]
+    colors = colors[scale_mask,:]
 
 
     camera_pose = np.array([
@@ -260,7 +262,8 @@ if __name__ == "__main__":
     height=48
     f = 80
 
-    eps = 0.0001
+    # eps = torch.Tensor([[0,0,0,0.0001,0.0001,0.0001]]).to(means.device)
+    eps = 0.00001
     tile_size = 16
     gauss_step = 5000000
 
@@ -328,7 +331,7 @@ if __name__ == "__main__":
     # Get all the pix_coord 
     empirical_lb = np.zeros((48,48,3))+1e10
     empirical_ub = np.zeros((48,48,3))-1e10
-    for i in range(20):
+    for i in range(100):
         pix_coord = torch.stack(torch.meshgrid(torch.arange(width), torch.arange(height), indexing='xy'), dim=-1).to(means.device)
         # Get the rectangles of gaussians under uncertainty 
         rect = get_rect(
@@ -405,11 +408,16 @@ if __name__ == "__main__":
                 render_color[h:h+tile_size, w:w+tile_size] = rgb_color
         empirical_lb = np.minimum(empirical_lb, render_color)
         empirical_ub = np.maximum(empirical_ub, render_color)
-    plt.figure(1)
-    plt.imshow(empirical_lb)
-    plt.figure(2)
-    plt.imshow(empirical_ub)
-    plt.show()
+        plt.figure(1)
+        plt.imshow(render_color)
+        plt.show()
+    # plt.figure(1)
+    # plt.imshow(empirical_lb)
+    # plt.savefig('res_lb_emp.png')
+    # plt.figure(2)
+    # plt.imshow(empirical_ub)
+    # plt.savefig('res_ub_emp.png')
+    # plt.show()
                 # inp_alpha = torch.clone(cam_inp)
                 # print(">>>>>> Starting Bounded Module")
                 # model_alpha_bounded = BoundedModule(model_alpha, inp_alpha, device=means.device)

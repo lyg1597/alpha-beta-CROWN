@@ -1,5 +1,4 @@
 import torch 
-import numpy as np 
 from inverse_op2 import Inverse
 
 def quaternion_to_rotation_matrix(quats):

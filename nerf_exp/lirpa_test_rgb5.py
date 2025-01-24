@@ -12,14 +12,14 @@ from auto_LiRPA import BoundedModule, BoundedTensor, PerturbationLpNorm
 def get_elem_before_linear(ptb: PerturbationLpNorm, A: defaultdict, model:BoundedModule):
     x_L = ptb.x_L
     x_U = ptb.x_U
-    x_bounds = torch.cat((x_L, x_U), dim=0)
+    x_bounds = torch.cat((x_L[0:1], x_U[0:1]), dim=0)
     x_bounds_list = x_bounds.transpose(0,1).detach().cpu().numpy().tolist()
     all_combins = list(itertools.product(*x_bounds_list))
 
-    lA: torch.Tensor = A[model.output_name[0]][model.input_name[0]]['lA']
-    uA: torch.Tensor = A[model.output_name[0]][model.input_name[0]]['uA']
-    lbias: torch.Tensor = A[model.output_name[0]][model.input_name[0]]['lbias']
-    ubias: torch.Tensor = A[model.output_name[0]][model.input_name[0]]['ubias']
+    lA: torch.Tensor = A[model.output_name[0]][model.input_name[0]]['lA'].transpose(0,1)
+    uA: torch.Tensor = A[model.output_name[0]][model.input_name[0]]['uA'].transpose(0,1)
+    lbias: torch.Tensor = A[model.output_name[0]][model.input_name[0]]['lbias'].transpose(0,1)
+    ubias: torch.Tensor = A[model.output_name[0]][model.input_name[0]]['ubias'].transpose(0,1)
     
     concrete_bound = {}
     possible_bound = {}
@@ -238,7 +238,11 @@ if __name__ == "__main__":
     model_depth = DepthModel(model_alpha)
     print("###### Model Depth")
 
-    res_alpha = model_alpha(camera_pose)
+    means_hom_tmp = model_alpha.means_hom_tmp
+    cov_world = model_alpha.cov_world 
+    opacities_rast = model_alpha.opacities_rast
+
+    res_alpha = model_alpha(camera_pose,means_hom_tmp, cov_world, opacities_rast)
     print("###### Alpha")
     res_depth = model_depth(camera_pose)
     print("###### Depth")
@@ -259,7 +263,7 @@ if __name__ == "__main__":
     print(">>>>>> Starting Bounded Module")
     model_alpha_bounded = BoundedModule(
         model_alpha, 
-        my_input, 
+        (my_input, means_hom_tmp, cov_world, opacities_rast), 
         device=model_alpha.device, 
         bound_opts= {
             'conv_mode': 'matrix',
@@ -275,16 +279,16 @@ if __name__ == "__main__":
     )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb_alpha)
-    prediction = model_alpha_bounded(my_input)
+    prediction = model_alpha_bounded(my_input, means_hom_tmp, cov_world, opacities_rast)
     model_alpha_bounded.visualize('alpha')
     print(">>>>>> Starting Compute Bound")
     required_A = defaultdict(set)
     required_A[model_alpha_bounded.output_name[0]].add(model_alpha_bounded.input_name[0])
     # lb_alpha, ub_alpha, A_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A)
-    lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='crown')
+    lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, means_hom_tmp, cov_world, opacities_rast), method='crown')
     lb_alpha = torch.clip(lb_alpha, min=0)
     ub_alpha = torch.clip(ub_alpha, max=0.99)
-    bounds_alpha = torch.cat((lb_alpha, ub_alpha), dim=0)
+    bounds_alpha = torch.stack((lb_alpha.transpose(0,1), ub_alpha.transpose(0,1)), dim=0)[:,:,:,None]
     
     model_depth = DepthModel(model_alpha)
     my_input = torch.clone(camera_pose)
@@ -332,34 +336,34 @@ if __name__ == "__main__":
     empirical_alpha_ub = np.zeros(ub_alpha.shape)
     lb_alpha = lb_alpha.detach().cpu().numpy()
     ub_alpha = ub_alpha.detach().cpu().numpy()
-    for i in range(1000):
-        tmp_input = my_input.repeat(1,1)
-        delta = torch.zeros((1,6))
-        # delta[:,:3,3] = torch.rand((1,3))*eps*2-eps
-        delta[:,:3] = torch.rand((1,3))*0.0*2-0.0
-        delta[:,3:] = torch.rand((1,3))*1.0*2-1.0
-        delta = delta.to(model_depth.device)
-        tmp_input = tmp_input+delta 
-        res_alpha = model_alpha(tmp_input)
-        res_depth = model_depth(tmp_input)
-        depth_order = torch.argsort(res_depth, dim=1).squeeze()
-        sorted_alpha = res_alpha[0,:,depth_order,:]
-        sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
-        sorted_color = colors[depth_order,:]
-        alphac = res_alpha[0]*colors[None]
-        sorted_alphac = alphac[:,depth_order]
-        rgb_color = (sorted_T * sorted_alphac).sum(dim=1)
-        res_alpha = res_alpha.detach().cpu().numpy()
-        empirical_alpha_lb = np.minimum(empirical_alpha_lb, res_alpha)
-        empirical_alpha_ub = np.maximum(empirical_alpha_ub, res_alpha)
-        rgb_color = rgb_color.reshape(w, h, -1)[:,:,:3]
-        rgb_color = rgb_color.detach().cpu().numpy()
-        empirical_lb = np.minimum(empirical_lb, rgb_color)
-        empirical_ub = np.maximum(empirical_ub, rgb_color)
-        valid_bound = np.all(rgb_color>=tile_color_lb) and np.all(rgb_color<=tile_color_ub)
-        if not valid_bound:
-            print("Bound Violated")
-            break
+    # for i in range(1000):
+    #     tmp_input = my_input.repeat(1,1)
+    #     delta = torch.zeros((1,6))
+    #     # delta[:,:3,3] = torch.rand((1,3))*eps*2-eps
+    #     delta[:,:3] = torch.rand((1,3))*0.0*2-0.0
+    #     delta[:,3:] = torch.rand((1,3))*1.0*2-1.0
+    #     delta = delta.to(model_depth.device)
+    #     tmp_input = tmp_input+delta 
+    #     res_alpha = model_alpha(tmp_input)
+    #     res_depth = model_depth(tmp_input)
+    #     depth_order = torch.argsort(res_depth, dim=1).squeeze()
+    #     sorted_alpha = res_alpha[0,:,depth_order,:]
+    #     sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
+    #     sorted_color = colors[depth_order,:]
+    #     alphac = res_alpha[0]*colors[None]
+    #     sorted_alphac = alphac[:,depth_order]
+    #     rgb_color = (sorted_T * sorted_alphac).sum(dim=1)
+    #     res_alpha = res_alpha.detach().cpu().numpy()
+    #     empirical_alpha_lb = np.minimum(empirical_alpha_lb, res_alpha)
+    #     empirical_alpha_ub = np.maximum(empirical_alpha_ub, res_alpha)
+    #     rgb_color = rgb_color.reshape(w, h, -1)[:,:,:3]
+    #     rgb_color = rgb_color.detach().cpu().numpy()
+    #     empirical_lb = np.minimum(empirical_lb, rgb_color)
+    #     empirical_ub = np.maximum(empirical_ub, rgb_color)
+    #     valid_bound = np.all(rgb_color>=tile_color_lb) and np.all(rgb_color<=tile_color_ub)
+    #     if not valid_bound:
+    #         print("Bound Violated")
+    #         break
 
     diff_compemp_ub = (ub_alpha-empirical_alpha_ub).reshape(w,h,-1)
     diff_compemp_lb = (empirical_alpha_lb-lb_alpha).reshape(w,h,-1)

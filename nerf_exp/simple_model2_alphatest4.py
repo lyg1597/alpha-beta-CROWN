@@ -110,7 +110,7 @@ class AlphaModel(torch.nn.Module):
             [self.fx, 0, self.width/2],
             [0, self.fy, self.height/2],
             [0,0,1]
-        ]).repeat((3,1,1)).to(self.device)
+        ]).to(self.device)
 
     @torch.no_grad()
     def prepare_rasterization_coefficients(
@@ -168,7 +168,7 @@ class AlphaModel(torch.nn.Module):
         pix_coord = torch.stack(torch.meshgrid(torch.arange(self.width), torch.arange(self.height), indexing='xy'), dim=-1).to(self.device)
         self.tile_coord = pix_coord.flatten(0,-2)[None,:,:]
 
-    def forward(self, x):
+    def forward(self, x, means_hom_tmp, cov_world, opacities_rast):
         # Define your computation here.
         gamma = x[:,0:1]
         beta = x[:,1:2]
@@ -197,12 +197,12 @@ class AlphaModel(torch.nn.Module):
         x = torch.cat([result, fixed_row], dim=1)  # shape: [N, 4, 4]
 
         # means_cam_hom: 1*3*4, x: 1*4*4, means_hom_tmp: 1*4*3
-        means_cam_hom = torch.matmul(x, self.means_hom_tmp).transpose(1,2)    # [N, 1, 4]
+        means_cam_hom = torch.matmul(x, means_hom_tmp).transpose(1,2)    # [N, 1, 4]
         means_cam = means_cam_hom[:,:,:3]                                     # [N, 1, 3]
         # means_cam = means_cam_hom[:, :, :3] / means_cam_hom[:, :, 3:4]  
 
         # Step 5: Project means onto the image plane
-        means_proj_hom = means_cam @ self.K.transpose(1,2)  # [N, 1, 3]
+        means_proj_hom = means_cam @ self.K.transpose(0,1)  # [N, 1, 3]
         z0 = means_proj_hom[:,:,2:3]                        # [N, 1, 1]
         means2D = means_proj_hom[:, :, :2]                  # [N, 1, 2]
         # return means_proj_hom 
@@ -210,7 +210,7 @@ class AlphaModel(torch.nn.Module):
         R_cam = x[:, :3, :3]                                        # [N, 3, 3]
         # R_cam = R_cam.unsqueeze(1)  # Add an extra dimension for broadcasting
         # First multiplication: R_cam @ self.cov_world
-        cov_temp = torch.matmul(R_cam, self.cov_world)              # [N, 3, 3]
+        cov_temp = torch.matmul(R_cam, cov_world)              # [N, 3, 3]
         cov_cam = torch.matmul(cov_temp, R_cam.transpose(-1, -2))   # [N, 3, 3]
         
         # # Step 6: Compute 2D covariance matrices using the Jacobian
@@ -283,7 +283,7 @@ class AlphaModel(torch.nn.Module):
             + dx[:,:,0]*dx[:,:,1] * conic0110[:, None]
             + dx[:,:,0]*dx[:,:,1] * conic0110[:, None])
         gauss_weight_orig = torch.exp(inside)               # [N, P]
-        alpha = gauss_weight_orig*self.opacities_rast       # [N, P]
+        alpha = gauss_weight_orig*opacities_rast       # [N, P]
         return alpha
 
         # alpha_clip = torch.clip(alpha, max=0.99)

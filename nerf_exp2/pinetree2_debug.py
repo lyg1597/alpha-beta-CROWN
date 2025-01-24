@@ -7,7 +7,7 @@ from simple_model2_alphatest2 import AlphaModel, DepthModel
 from rasterization_pytorch import rasterize_gaussians_pytorch_rgb
 from scipy.spatial.transform import Rotation 
 from collections import defaultdict
-from utils import get_rect_set, \
+from img_helper import get_rect_set, \
     get_viewmat, \
     get_bound_depth_step, \
     computeT_new, \

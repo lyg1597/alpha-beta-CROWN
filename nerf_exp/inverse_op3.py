@@ -162,7 +162,7 @@ class BoundInverse(Bound):
         else:
             last_lA_view = last_lA.view((last_lA.shape[0], last_lA.shape[1], -1))
             lA = torch.einsum('ijk,jkab->ijab', last_lA_view, EpsAlb_const)
-            lbias = -torch.einsum("xyuv,uv->xy", lA, A0_const)
+            lbias = -torch.einsum("xyuv,yuv->xy", lA, A0_const)
             lbias = lbias+torch.einsum('ixa,xa->ix', last_lA_view, Epsbiaslb_const)
             lbias = lbias-torch.einsum('ixab,xab->ix', last_lA, T_mat_const)
 
@@ -172,7 +172,7 @@ class BoundInverse(Bound):
         else:
             last_uA_view = last_uA.view((last_uA.shape[0], last_uA.shape[1], -1))
             uA = torch.einsum('ijk,jkab->ijab', last_uA_view, EpsAub_const)
-            ubias = -torch.einsum("xyuv,uv->xy", uA, A0_const)
+            ubias = -torch.einsum("xyuv,yuv->xy", uA, A0_const)
             ubias = ubias+torch.einsum('ixa,xa->ix', last_uA_view, Epsbiasub_const)
             ubias = ubias-torch.einsum('ixab,xab->ix', last_uA, T_mat_const)
 

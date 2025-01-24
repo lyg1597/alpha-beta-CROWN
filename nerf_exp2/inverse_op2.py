@@ -98,19 +98,25 @@ class BoundInverse(Bound):
 
     def bound_backward(self, last_lA, last_uA, x, *args, **kwargs):
         A_lb, A_ub = x.lower.clone().detach(), x.upper.clone().detach()
+        input_has_nan = torch.any(torch.isnan(A_lb)) and torch.any(torch.isnan(A_ub))
         A0 = (A_lb+A_ub)/2
         delta = (A_ub-A_lb)/2
-        A0inv = torch.inverse(A0).squeeze()
-        val = torch.norm(delta@A0inv)   
-        T = torch.norm(A0inv)*val**16/(1-val)
-        T_mat = torch.Tensor([[
-            [T, T/np.sqrt(2)],
-            [T/np.sqrt(2), T]
-        ]]).to(A0.device)
+        A0inv = torch.inverse(A0)
+        val = torch.norm(delta@A0inv, dim=(2,3))   
+        T = torch.norm(A0inv, dim=(2,3))*val**16/(1-val)
+        mask = torch.Tensor([
+            [1, 1/np.sqrt(2)],
+            [1/np.sqrt(2), 1]
+        ]).to(A0.device)
+        T_mat = T[:,:,None,None]*mask[None,None]
+        # T_mat = torch.Tensor([[
+        #     [T, T/np.sqrt(2)],
+        #     [T/np.sqrt(2), T]
+        # ]]).to(A0.device)
 
         # model_inverse_lb = InverseModelLb(A0)
         # model_inverse_ub = InverseModelUb(A0)
-        eps_model = EpsModel(A0inv, device = A0inv.device)
+        eps_model = EpsModel(A0inv.squeeze(), device = A0inv.device)
     
         ptb_delta = PerturbationLpNorm(
             norm=np.inf, 
@@ -123,31 +129,34 @@ class BoundInverse(Bound):
             device=eps_model.device, 
             bound_opts={
                 'conv_mode': 'matrix', 
-                'optimize_bound_args': {'iteration': 10}
+                'optimize_bound_args': {'iteration': 20, 'early_stop_patience': 5}
             },
         )
         required_A = defaultdict(set)
         required_A[model_eps_bounded.output_name[0]].add(model_eps_bounded.input_name[0])
-        with torch.no_grad():
-            lb_eps, ub_eps, A_eps = model_eps_bounded.compute_bounds(
-                x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A,
-            )
-        # if True:
-        # if self.counter%30==0 or self.stored_bounds is None or torch.any(A_lb<self.stored_inp_lb) or torch.any(A_ub>self.stored_inp_ub):
-        #     print(f"####### Bound Backward Inverse Alpha: {self.counter}, {self.alpha_counter}")
+        # with torch.no_grad():
         #     lb_eps, ub_eps, A_eps = model_eps_bounded.compute_bounds(
-        #         x=(my_input, ), 
-        #         method='alpha-crown', 
-        #         return_A=True, 
-        #         needed_A_dict=required_A,
+        #         x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A,
         #     )
-        #     self.stored_bounds = A_eps 
-        #     self.stored_inp_lb = A_lb 
-        #     self.stored_inp_ub = A_ub
-        #     self.alpha_counter+= 1
-        # else:
-        #     print(f"####### Bound Backward Inverse: {self.counter}, {self.alpha_counter}")
-        #     A_eps = self.stored_bounds
+        # if True:
+        if self.counter%30==0 or self.stored_bounds is None or torch.any(A_lb<self.stored_inp_lb) or torch.any(A_ub>self.stored_inp_ub):
+            print(f"####### Bound Backward Inverse Alpha: {self.counter}, {self.alpha_counter}")
+            lb_eps, ub_eps, A_eps = model_eps_bounded.compute_bounds(
+                x=(my_input, ), 
+                method='alpha-crown', 
+                return_A=True, 
+                needed_A_dict=required_A,
+            )
+            self.stored_bounds = A_eps 
+            self.stored_inp_lb = A_lb 
+            self.stored_inp_ub = A_ub
+            self.alpha_counter+= 1
+            output_has_nan = torch.any(torch.isnan(lb_eps)) and torch.any(torch.isnan(ub_eps))
+            if not input_has_nan and output_has_nan:
+                raise ValueError("NAN caused by inverse")
+        else:
+            print(f"####### Bound Backward Inverse: {self.counter}, {self.alpha_counter}")
+            A_eps = self.stored_bounds
         self.counter += 1 
         EpsAlb: torch.Tensor = A_eps[model_eps_bounded.output_name[0]][model_eps_bounded.input_name[0]]['lA']
         Epsbiaslb: torch.Tensor = A_eps[model_eps_bounded.output_name[0]][model_eps_bounded.input_name[0]]['lbias']
@@ -170,7 +179,7 @@ class BoundInverse(Bound):
             lA = torch.einsum('ijk,jkabc->ijabc', last_lA_view, EpsAlb_const)
             lbias = -torch.einsum("xyzuv,zuv->xy", lA, A0_const)
             lbias = lbias+torch.einsum('ixa,xa->ix', last_lA_view, Epsbiaslb_const)
-            lbias = lbias-torch.einsum('ixabc,abc->ix', last_lA, T_mat_const)
+            lbias = lbias-torch.einsum('ixabc,xabc->ix', last_lA, T_mat_const)
             
         if last_uA is None:
             uA = None 
@@ -180,7 +189,7 @@ class BoundInverse(Bound):
             uA = torch.einsum('ijk,jkabc->ijabc', last_uA_view, EpsAub_const)
             ubias = -torch.einsum("xyzuv,zuv->xy", uA, A0_const)
             ubias = ubias+torch.einsum('ixa,xa->ix', last_uA_view, Epsbiasub_const)
-            ubias = ubias-torch.einsum('ixabc,abc->ix', last_uA, T_mat_const)
+            ubias = ubias-torch.einsum('ixabc,xabc->ix', last_uA, T_mat_const)
             
             # ufirst_term = -(uA*A0_const[None,None]).sum(dim=list(range(2, uA.ndim)))
             # usecond_term = (last_uA_tmp*Epsbiasub_const[None]).sum(dim=list(range(2,last_uA_tmp.ndim)))
@@ -194,12 +203,18 @@ class BoundInverse(Bound):
         A0 = (A_lb+A_ub)/2
         delta = (A_ub-A_lb)/2
         A0inv = torch.inverse(A0)
-        val = torch.norm(delta@A0inv)   
-        T = torch.norm(A0inv)*val**16/(1-val)
-        T_mat = torch.Tensor([[
-            [T, T/np.sqrt(2)],
-            [T/np.sqrt(2), T]
-        ]]).to(A0.device)
+        val = torch.norm(delta@A0inv, dim=(2,3))   
+        T = torch.norm(A0inv, dim=(2,3))*val**16/(1-val)
+        mask = torch.Tensor([
+            [1, 1/np.sqrt(2)],
+            [1/np.sqrt(2), 1]
+        ]).to(A0.device)
+        T_mat = T[:,:,None,None]*mask[None,None]
+
+        # T_mat = torch.Tensor([[
+        #     [T, T/np.sqrt(2)],
+        #     [T/np.sqrt(2), T]
+        # ]]).to(A0.device)
 
         eps_model = EpsModel(A0inv, A0inv.device)
     
@@ -314,6 +329,6 @@ if __name__ == "__main__":
     prediction = model_inverse_bounded(my_input)
     model_inverse_bounded.visualize('inverse')
     
-    lb_inverse, ub_inverse = model_inverse_bounded.compute_bounds(x=(my_input, ), method='alpha-crown')
+    lb_inverse, ub_inverse = model_inverse_bounded.compute_bounds(x=(my_input, ), method='crown')
     print(lb_inverse, ub_inverse)
     
