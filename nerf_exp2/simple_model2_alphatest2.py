@@ -195,8 +195,8 @@ class AlphaModel(torch.nn.Module):
         y = means_cam[:, :, 1]
         z_cam = means_cam[:, :, 2]
 
-        # tx = torch.min(z_cam*self.lim_x, torch.max(-z_cam*self.lim_x, x))
-        # ty = torch.min(z_cam*self.lim_y, torch.max(-z_cam*self.lim_y, y))
+        tx = torch.min(z_cam*self.lim_x, torch.max(-z_cam*self.lim_x, x))
+        ty = torch.min(z_cam*self.lim_y, torch.max(-z_cam*self.lim_y, y))
         # return ty
 
         J00 = z_cam*self.fx 
