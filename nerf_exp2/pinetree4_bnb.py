@@ -396,9 +396,9 @@ if __name__ == "__main__":
     res_lb = np.zeros((48,48,3))+1e10
     res_ub = np.zeros((48,48,3))-1e10
 
-    for x_part in range(0,1):
-        for y_part in range(0,1):
-            for z_part in range(0,1):
+    for x_part in range(0,5):
+        for y_part in range(0,5):
+            for z_part in range(0,5):
                 print(f"%%%%%%%%%%%%%%%% partition {x_part}, {y_part}, {z_part}")
                 eps_lb = torch.Tensor([[0,0,0,-0.0001+x_part*0.00004,-0.0001+y_part*0.00004,-0.0001+z_part*0.00004]]).to(means.device)
                 eps_ub = torch.Tensor([[0,0,0,-0.0001+x_part*0.00004+0.00004,-0.0001+y_part*0.00004+0.00004,-0.0001+z_part*0.00004+0.00004]]).to(means.device)
