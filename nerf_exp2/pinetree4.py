@@ -11,7 +11,10 @@ from collections import defaultdict
 #     get_bound_depth_step, \
 #     computeT_new_optimized, \
 #     computeT_new_new
-# import time 
+import time 
+
+crown_time = 0
+crown_call = 0
 
 def linear_bounds(A,b,x_L, x_U):
     pos_mask = (A>=0).float() 
@@ -134,11 +137,11 @@ def get_rect_set(
 
     lb_mean = lb_mean.squeeze()
     ub_mean = ub_mean.squeeze()
-    mask = ub_mean[:,2]>=1e-8
+    mask = (lb_mean[:,2]>0.01) & (ub_mean[:,2]<10000000000)
     lb_mean = lb_mean[mask]
     ub_mean = ub_mean[mask]
-    lb_mean = lb_mean.clip(min=1e-8)
-    ub_mean = ub_mean.clip(min=1e-8)
+    # lb_mean = lb_mean.clip(min=1e-8)
+    # ub_mean = ub_mean.clip(min=1e-8)
     lb_mean2D = lb_mean[:,:2]/ub_mean[:,2:]
     ub_mean2D = ub_mean[:,:2]/lb_mean[:,2:]
 
@@ -203,6 +206,7 @@ def compute_tile_color(
     tile_size,
     gauss_step,
 ):
+    global crown_call, crown_time
     tile_coord = pix_coord[hbl:htr, wbl:wtr].flatten(0,-2)
     N = means_strip.shape[0]
 
@@ -229,7 +233,7 @@ def compute_tile_color(
             fy = f,
             width = width,
             height = height,
-            tile_coord = tile_coord 
+            tile_coord = tile_coord,
         )
         means_hom_tmp = model_alpha.means_hom_tmp.transpose(0,2)
         cov_world = model_alpha.cov_world 
@@ -261,11 +265,27 @@ def compute_tile_color(
         # print(">>>>>> Starting BoundedTensor")
         inp_alpha = BoundedTensor(inp_alpha, ptb_alpha)
         # prediction = model_alpha_bounded(inp_alpha)
-        # tmp = time.time()
-        lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(
+        tmp = time.time()
+        tmp_lb_alpha, tmp_ub_alpha = model_alpha_bounded.compute_bounds(
             x=(inp_alpha, means_hom_tmp, cov_world, opacities_rast), 
             method='crown'
         )
+        crown_time = crown_time + time.time()-tmp
+        crown_call += 1 
+        # tmp_lb_alpha_emp = torch.zeros(tmp_lb_alpha.shape, device = tmp_lb_alpha.device)+1e10
+        # tmp_ub_alpha_emp = torch.zeros(tmp_ub_alpha.shape, device = tmp_ub_alpha.device)-1e10
+        
+        tmp_lb_alpha2 = torch.minimum(tmp_lb_alpha, tmp_ub_alpha)
+        tmp_ub_alpha2 = torch.maximum(tmp_lb_alpha, tmp_ub_alpha)
+        # lb_alpha = tmp_lb_alpha
+        # ub_alpha = tmp_ub_alpha
+        lb_alpha = -tmp_ub_alpha2*0.5
+        ub_alpha = -tmp_lb_alpha2*0.5
+        lb_alpha = torch.exp(lb_alpha)
+        ub_alpha = torch.exp(ub_alpha)
+        ub_alpha = ub_alpha.clip(max=1.0)
+        lb_alpha = lb_alpha*opacities_rast
+        ub_alpha = ub_alpha*opacities_rast
         # print(f'time for compute bound {time.time()-tmp}')
         # bounds_alpha = torch.cat((lb_alpha, ub_alpha), dim=0)
         lb_alpha = lb_alpha.transpose(0,1)[None,:,:,None]
@@ -274,6 +294,7 @@ def compute_tile_color(
         overall_alpha_ub = torch.cat((overall_alpha_ub, ub_alpha), dim=2)
         overall_alpha_lb = overall_alpha_lb.clip(min=0.0, max=0.99)
         overall_alpha_ub = overall_alpha_ub.clip(min=0.0, max=0.99)
+
 
         inp_depth = torch.clone(cam_inp).repeat(BS, 1)
         # print(">>>>>> Starting Bounded Module")
@@ -309,16 +330,6 @@ def compute_tile_color(
     overall_depth_ubias = overall_depth_ubias[:,mask]
     colors_strip = colors_strip[mask,:]
 
-    # step_L, step_U = get_bound_depth_step(
-    #     ptb_depth,
-    #     overall_depth_lA,
-    #     overall_depth_uA,
-    #     overall_depth_lbias,
-    #     overall_depth_ubias,
-    # )
-    # tmp_res_Tl_old = computeT_new_optimized(overall_alpha_ub, step_U)
-    # tmp_res_Tu_old = computeT_new_optimized(overall_alpha_lb, step_L)
-
     tmp_res_Tl, tmp_res_Tu = computeT_new_new(
         ptb_depth,
         overall_depth_lA,
@@ -347,8 +358,8 @@ if __name__ == "__main__":
     scale = dt['scale']
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    output_folder = os.path.join(script_dir, '../../nerfstudio/outputs/triangular_data4/splatfacto/2025-01-19_232156')
-    checkpoint = "step-000029999.ckpt"
+    output_folder = os.path.join(script_dir, '../../nerfstudio/outputs/triangular_data4/splatfacto/2025-01-28_015204')
+    checkpoint = "step-000059999.ckpt"
     
     checkpoint_fn = os.path.join(output_folder, 'nerfstudio_models', checkpoint)
     res = torch.load(checkpoint_fn)
@@ -358,24 +369,31 @@ if __name__ == "__main__":
     scales = res['pipeline']['_model.gauss_params.scales']
     colors = torch.sigmoid(res['pipeline']['_model.gauss_params.features_dc'])
 
+    mask = (means[:,0]>=-0.8) & (means[:,0]<=0.8) & (means[:,1]>=-0.2) & (means[:,1]<=0.2) & (means[:,2]>=-0.21) & (means[:,2]<=-0.00)
+    means = means[mask]
+    quats = quats[mask]
+    opacities = opacities[mask]
+    scales = scales[mask]
+    colors = colors[mask]
+
     camera_pose = np.array([
         [
             0.0,
             0.0,
             1.0,
-            200.0
+            194.5
         ],
         [
             0.0,
             1.0,
             0.0,
-            5.0
+            4.5
         ],
         [
             -1.0,
             0.0,
             0.0,
-            0.0
+            -0.1
         ],
         [
             0.0,
@@ -391,13 +409,13 @@ if __name__ == "__main__":
     camera_pose_transformed[:3,3] *= scale 
     camera_pose_transformed = torch.Tensor(camera_pose_transformed)[None].to(means.device)
 
-    width=48
-    height=48
-    f = 80
+    width=49
+    height=49
+    f = 70
 
-    eps_lb = torch.Tensor([[0,0,0,-0.0001,-0.0001,-0.0001]]).to(means.device)
-    eps_ub = torch.Tensor([[0,0,0,0.0001,0.0001,0.0001]]).to(means.device)
-    tile_size_global = 8
+    eps_lb = torch.Tensor([[0,0,0,0,0,0]]).to(means.device)
+    eps_ub = torch.Tensor([[0,0,0,0.02*scale,0.02*scale,0.02*scale]]).to(means.device)
+    tile_size_global = 10
     gauss_step = 10000
     threshold = tile_size_global**2*gauss_step
     initial_tilesize = 128
@@ -424,25 +442,25 @@ if __name__ == "__main__":
     ]
     cam_inp = torch.Tensor(cam_inp)[None].to('cuda')
 
-    with torch.no_grad():
-        res = rasterize_gaussians_pytorch_rgb(
-            means, 
-            quats/ quats.norm(dim=-1, keepdim=True),
-            torch.exp(scales),
-            torch.sigmoid(opacities).squeeze(-1),
-            colors,
-            view_mats, 
-            Ks,
-            width,
-            height
-        )
-    res_rgb = res['render']
-    print(res_rgb.shape)
-    res_rgb = res_rgb[:,...,:3]
-    res_rgb = res_rgb.detach().cpu().numpy()
-    plt.figure(0)
-    plt.imshow(res_rgb)
-    plt.show()
+    # with torch.no_grad():
+    #     res = rasterize_gaussians_pytorch_rgb(
+    #         means, 
+    #         quats/ quats.norm(dim=-1, keepdim=True),
+    #         torch.exp(scales),
+    #         torch.sigmoid(opacities).squeeze(-1),
+    #         colors,
+    #         view_mats, 
+    #         Ks,
+    #         width,
+    #         height
+    #     )
+    # res_rgb = res['render']
+    # print(res_rgb.shape)
+    # res_rgb = res_rgb[:,...,:3]
+    # res_rgb = res_rgb.detach().cpu().numpy()
+    # plt.figure(0)
+    # plt.imshow(res_rgb)
+    # plt.show()
 
     # Get all the pix_coord 
     pix_coord = torch.stack(torch.meshgrid(torch.arange(width), torch.arange(height), indexing='xy'), dim=-1).to(means.device)
@@ -466,112 +484,121 @@ if __name__ == "__main__":
     scales = scales[mask]
     colors = colors[mask]
     
-    queue = [
-        (h,w,min(h+initial_tilesize, height),min(w+initial_tilesize, width), initial_tilesize) \
-        for w in range(0, width, initial_tilesize) for h in range(0, height, initial_tilesize)
-    ]
-    # Implement adaptive tile size 
-    while queue!=[]:
-        hbl,wbl,htr,wtr,tile_size = queue[0]
-        queue.pop(0)
-        over_tl = rect[0][..., 0].clip(min=wbl), rect[0][..., 1].clip(min=hbl)
-        over_br = rect[1][..., 0].clip(max=wtr-1), rect[1][..., 1].clip(max=htr-1)
-        in_mask = (over_br[0] >= over_tl[0]) & (over_br[1] >= over_tl[1])
-        if not in_mask.sum() > 0:
-            continue
-        N = torch.where(in_mask)[0].shape[0]
-        # If tile size too large or too much gaussians 
-        if tile_size**2*N>threshold and tile_size>tile_size_global:
-            if tile_size == 1:
-                raise ValueError(f"Tile size can't be partitioned anymore, too many gaussians to be handled for ({hbl}, {wbl}), ({htr}, {wtr})")
-            tile_size = tile_size//2 
-            new_partitions = [
-                (h,w,min(h+tile_size, htr),min(w+tile_size, wtr), tile_size) \
-                for w in range(wbl, wtr, tile_size) for h in range(hbl, htr, tile_size)
-            ]
-            queue = queue+new_partitions 
-            continue 
-        means_strip = means[in_mask]
-        quats_strip = quats[in_mask]
-        opacities_strip = opacities[in_mask]
-        scales_strip = scales[in_mask]
-        colors_strip = colors[in_mask]
-        print(f">>>>>>>> {hbl}, {wbl}, {htr}, {wtr}, {means_strip.shape[0]}")
+    # queue = [
+    #     (h,w,min(h+initial_tilesize, height),min(w+initial_tilesize, width), initial_tilesize) \
+    #     for w in range(0, width, initial_tilesize) for h in range(0, height, initial_tilesize)
+    # ]
+    # # Implement adaptive tile size 
+    # while queue!=[]:
+    #     hbl,wbl,htr,wtr,tile_size = queue[0]
+    #     queue.pop(0)
+    #     over_tl = rect[0][..., 0].clip(min=wbl), rect[0][..., 1].clip(min=hbl)
+    #     over_br = rect[1][..., 0].clip(max=wtr-1), rect[1][..., 1].clip(max=htr-1)
+    #     in_mask = (over_br[0] >= over_tl[0]) & (over_br[1] >= over_tl[1])
+    #     if not in_mask.sum() > 0:
+    #         continue
+    #     N = torch.where(in_mask)[0].shape[0]
+    #     # If tile size too large or too much gaussians 
+    #     if tile_size**2*N>threshold and tile_size>tile_size_global:
+    #         if tile_size == 1:
+    #             raise ValueError(f"Tile size can't be partitioned anymore, too many gaussians to be handled for ({hbl}, {wbl}), ({htr}, {wtr})")
+    #         tile_size = tile_size//2 
+    #         new_partitions = [
+    #             (h,w,min(h+tile_size, htr),min(w+tile_size, wtr), tile_size) \
+    #             for w in range(wbl, wtr, tile_size) for h in range(hbl, htr, tile_size)
+    #         ]
+    #         queue = queue+new_partitions 
+    #         continue 
+    #     means_strip = means[in_mask]
+    #     quats_strip = quats[in_mask]
+    #     opacities_strip = opacities[in_mask]
+    #     scales_strip = scales[in_mask]
+    #     colors_strip = colors[in_mask]
+    #     print(f">>>>>>>> {hbl}, {wbl}, {htr}, {wtr}, {means_strip.shape[0]}")
 
-        tile_color_lb, tile_color_ub = compute_tile_color(
-            cam_inp,
-            eps_lb,
-            eps_ub,
-            means_strip,
-            opacities_strip,
-            scales_strip,
-            quats_strip,
-            colors_strip,
-            f,
-            wbl,
-            hbl,
-            wtr,
-            htr,
-            width,
-            height,
-            pix_coord,
-            tile_size,
-            gauss_step
-        )
-        render_color_lb[hbl:htr, wbl:wtr] = tile_color_lb
-        render_color_ub[hbl:htr, wbl:wtr] = tile_color_ub
-        plt.imshow(render_color_lb)
-        plt.savefig('res_lb.png')
-        plt.imshow(render_color_ub)
-        plt.savefig('res_ub.png')
+    #     tile_color_lb, tile_color_ub = compute_tile_color(
+    #         cam_inp,
+    #         eps_lb,
+    #         eps_ub,
+    #         means_strip,
+    #         opacities_strip,
+    #         scales_strip,
+    #         quats_strip,
+    #         colors_strip,
+    #         f,
+    #         wbl,
+    #         hbl,
+    #         wtr,
+    #         htr,
+    #         width,
+    #         height,
+    #         pix_coord,
+    #         tile_size,
+    #         gauss_step
+    #     )
+    #     render_color_lb[hbl:htr, wbl:wtr] = tile_color_lb
+    #     render_color_ub[hbl:htr, wbl:wtr] = tile_color_ub
+    #     plt.imshow(render_color_lb)
+    #     plt.savefig('res_lb.png')
+    #     plt.imshow(render_color_ub)
+    #     plt.savefig('res_ub.png')
         
 
-    # for h in range(0, height, tile_size_global):
-    #     for w in range(0, width, tile_size_global):
-    #         # if h!=8 or w!=0:
-    #         #     continue
-    #         # if h>24:
-    #         #     continue
-    #         over_tl = rect[0][..., 0].clip(min=w), rect[0][..., 1].clip(min=h)
-    #         over_br = rect[1][..., 0].clip(max=w+tile_size_global-1), rect[1][..., 1].clip(max=h+tile_size_global-1)
-    #         in_mask = (over_br[0] >= over_tl[0]) & (over_br[1] >= over_tl[1])
-    #         if not in_mask.sum() > 0:
-    #             continue
-    #         means_strip = means[in_mask]
-    #         quats_strip = quats[in_mask]
-    #         opacities_strip = opacities[in_mask]
-    #         scales_strip = scales[in_mask]
-    #         colors_strip = colors[in_mask]
-    #         print(f">>>>>>>> {h}, {w}, {means_strip.shape[0]}")
+    for h in range(0, height, tile_size_global):
+        for w in range(0, width, tile_size_global):
+            # if h!=8 or w!=0:
+            #     continue
+            # if h>24:
+            #     continue
+            over_tl = rect[0][..., 0].clip(min=w), rect[0][..., 1].clip(min=h)
+            over_br = rect[1][..., 0].clip(max=min(width, w+tile_size_global)-1), rect[1][..., 1].clip(max=min(height, h+tile_size_global)-1)
+            in_mask = (over_br[0] >= over_tl[0]) & (over_br[1] >= over_tl[1])
+            if not in_mask.sum() > 0:
+                continue
+            means_strip = means[in_mask]
+            quats_strip = quats[in_mask]
+            opacities_strip = opacities[in_mask]
+            scales_strip = scales[in_mask]
+            colors_strip = colors[in_mask]
+            print(f">>>>>>>> {h}, {w}, {means_strip.shape[0]}")
 
-    #         tile_color_lb, tile_color_ub = compute_tile_color(
-    #             cam_inp,
-    #             eps_lb,
-    #             eps_ub,
-    #             means_strip,
-    #             opacities_strip,
-    #             scales_strip,
-    #             quats_strip,
-    #             colors_strip,
-    #             f,
-    #             w,
-    #             h,
-    #             w+tile_size_global,
-    #             h+tile_size_global,
-    #             width,
-    #             height,
-    #             pix_coord,
-    #             tile_size_global,
-    #             gauss_step
-    #         )
-    #         render_color_lb[h:h+tile_size_global, w:w+tile_size_global] = tile_color_lb
-    #         render_color_ub[h:h+tile_size_global, w:w+tile_size_global] = tile_color_ub
-    #         plt.imshow(render_color_lb)
-    #         plt.savefig('res_lb.png')
-    #         plt.imshow(render_color_ub)
-    #         plt.savefig('res_ub.png')
-    plt.figure(1)
-    plt.imshow(render_color_lb)
-    plt.figure(2)
-    plt.imshow(render_color_ub)
-    plt.show()
+            tile_color_lb, tile_color_ub = compute_tile_color(
+                cam_inp,
+                eps_lb,
+                eps_ub,
+                means_strip,
+                opacities_strip,
+                scales_strip,
+                quats_strip,
+                colors_strip,
+                f,
+                w,
+                h,
+                min(w+tile_size_global, width),
+                min(h+tile_size_global, height),
+                width,
+                height,
+                pix_coord,
+                tile_size_global,
+                gauss_step
+            )
+            render_color_lb[h:min(h+tile_size_global, height), w:min(w+tile_size_global, width)] = tile_color_lb
+            render_color_ub[h:min(h+tile_size_global, height), w:min(w+tile_size_global, width)] = tile_color_ub
+            plt.imshow(render_color_lb)
+            plt.savefig('res_lb.png')
+            plt.imshow(render_color_ub)
+            plt.savefig('res_ub.png')
+    from PIL import Image 
+    render_color_lb = (render_color_lb.clip(min=0.0, max=1.0)*255).astype(np.uint8)
+    render_color_ub = (render_color_ub.clip(min=0.0, max=1.0)*255).astype(np.uint8)
+    res_lb = Image.fromarray(render_color_lb)
+    res_ub = Image.fromarray(render_color_ub)
+    new_width = width*5
+    new_height = height*5 
+    res_lb_enlarged = res_lb.resize((new_width, new_height), Image.NEAREST)
+    res_ub_enlarged = res_ub.resize((new_width, new_height), Image.NEAREST)
+    res_lb_enlarged.save('pinetree4_lb.png')
+    res_ub_enlarged.save('pinetree4_ub.png')
+
+    print(f">>>>>>> {eps_lb}, {eps_ub}, mean_diff {np.mean(np.linalg.norm(render_color_ub-render_color_lb,axis=2))}, max_diff {np.max(np.linalg.norm(render_color_ub-render_color_lb,axis=2))}, average crown time {crown_time/crown_call}, total crown calls {crown_call}")
+    

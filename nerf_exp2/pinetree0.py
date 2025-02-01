@@ -3,10 +3,10 @@ import torch
 import os 
 import numpy as np 
 import matplotlib.pyplot as plt 
-from rasterize_model import RasterizationModelRGB_notile, DepthModel
-from simple_model2_alphatest2 import AlphaModel, DepthModel
+# from rasterize_model import RasterizationModelRGB_notile, DepthModel
+from simple_model2_alphatest4 import AlphaModel, DepthModel
 from rasterization_pytorch import rasterize_gaussians_pytorch_rgb
-from splat_model import SplatModel
+# from splat_model import SplatModel
 from typing import List, Dict
 from scipy.spatial.transform import Rotation 
 from collections import defaultdict
@@ -212,6 +212,31 @@ if __name__ == "__main__":
     scales = res['pipeline']['_model.gauss_params.scales']
     colors = torch.sigmoid(res['pipeline']['_model.gauss_params.features_dc'])
 
+    # Tree1
+    mask = (means[:,0]>=0.476) & (means[:,0]<=0.508) & (means[:,1]>=-0.1) & (means[:,1]<=-0.06) & (means[:,2]>=-0.162) & (means[:,2]<=-0.06)
+    means = means[~mask]
+    quats = quats[~mask]
+    opacities = opacities[~mask]
+    scales = scales[~mask]
+    colors = colors[~mask]
+
+    # Tree2
+    mask = (means[:,0]>=0.6) & (means[:,0]<=0.64) & (means[:,1]>=-0.1) & (means[:,1]<=-0.06) & (means[:,2]>=-0.158) & (means[:,2]<=-0.055)
+    means = means[~mask]
+    quats = quats[~mask]
+    opacities = opacities[~mask]
+    scales = scales[~mask]
+    colors = colors[~mask]
+
+
+    # mask = (means[:,0]>=-0.02) & (means[:,0]<=0.85) & (means[:,1]>=-0.151) & (means[:,1]<=-0.098) & (means[:,2]>=-0.17) & (means[:,2]<=-0.071)
+    # means = means[mask]
+    # quats = quats[mask]
+    # opacities = opacities[mask]
+    # scales = scales[mask]
+    # colors = colors[mask]
+    # opacities[mask] = -10
+
     # Filter unnecessary gaussians 
     # color_mask = torch.norm(colors, dim=1)>0.1
     # means_trans = torch.inverse(torch.tensor(transform_ap).to(means.device))@means.transpose(0,1)/scale
@@ -228,13 +253,13 @@ if __name__ == "__main__":
             0.0,
             0.0,
             1.0,
-            200.0
+            194.5
         ],
         [
             0.0,
             1.0,
             0.0,
-           5.0
+            5.0
         ],
         [
             -1.0,
@@ -256,35 +281,15 @@ if __name__ == "__main__":
     camera_pose_transformed[:3,3] *= scale 
     camera_pose_transformed = torch.Tensor(camera_pose_transformed)[None].to(means.device)
 
-    width=96
-    height=96
-    f = 120
+    width=240
+    height=240
+    f = 300
 
     eps = 0.001
-    tile_size = 16
-    gauss_step = 5000000
+    tile_size = 4
+    gauss_step = 10
 
     # camera_to_worlds = torch.Tensor(camera_pose)[None].to(means.device)
-    camera_to_world = [
-        [0.09323342123480016,
-        -0.21989920695796833,
-        0.9710570878913922,
-        0.3464003611615004,],
-        [0.9956442784272173,
-        0.02059164687201054,
-        -0.09093104483202696,
-        -0.0148054846552511,],
-        [-2.7755575615628914e-16,
-        0.975305245991405,
-        0.22086121692512006,
-        -0.13118252322656915,],
-        [0.0,
-        0.0,
-        0.0,
-        1.0]
-    ]
-    camera_to_world = torch.Tensor(camera_pose_transformed)[None].to(means.device)
-
     view_mats = get_viewmat(camera_pose_transformed)
     Ks = torch.tensor([[
         [f, 0, width/2],
@@ -315,7 +320,8 @@ if __name__ == "__main__":
             view_mats, 
             Ks,
             width,
-            height
+            height,
+            eps2d=0.0,
         )
     res_rgb = res['render']
     print(res_rgb.shape)
@@ -339,10 +345,10 @@ if __name__ == "__main__":
         height 
     )
     render_color = np.zeros((*pix_coord.shape[:2], colors.shape[-1]))
-    for h in range(0, height, tile_size):
-        for w in range(0, width, tile_size):
+    for h in range(0, height, 8):
+        for w in range(0, width, 8):
             over_tl = rect[0][..., 0].clip(min=w), rect[0][..., 1].clip(min=h)
-            over_br = rect[1][..., 0].clip(max=w+tile_size-1), rect[1][..., 1].clip(max=h+tile_size-1)
+            over_br = rect[1][..., 0].clip(max=w+8-1), rect[1][..., 1].clip(max=h+8-1)
             in_mask = (over_br[0] > over_tl[0]) & (over_br[1] > over_tl[1])
             if not in_mask.sum() > 0:
                 continue
@@ -358,18 +364,18 @@ if __name__ == "__main__":
             # colors_strip = colors
 
 
-            tile_coord = pix_coord[h:h+tile_size, w:w+tile_size].flatten(0,-2)
+            tile_coord = pix_coord[h:h+8, w:w+8].flatten(0,-2)
             N = means_strip.shape[0]
 
-            overall_alpha = torch.zeros((1,tile_size*tile_size, 0, 1)).to(means.device)
+            overall_alpha = torch.zeros((1,8*8, 0, 1)).to(means.device)
             overall_depth = torch.zeros((1,0)).to(means.device)
 
-            for j in range(0, N, gauss_step):
+            for j in range(0, N, 10000000000):
                 data_pack = {
-                    'opacities': torch.Tensor(opacities_strip[j:j+gauss_step]),
-                    'means': torch.Tensor(means_strip[j:j+gauss_step]),
-                    'scales':torch.Tensor(scales_strip[j:j+gauss_step]),
-                    'quats':torch.Tensor(quats_strip[j:j+gauss_step]),
+                    'opacities': torch.Tensor(opacities_strip[j:j+10000000000]),
+                    'means': torch.Tensor(means_strip[j:j+10000000000]),
+                    'scales':torch.Tensor(scales_strip[j:j+10000000000]),
+                    'quats':torch.Tensor(quats_strip[j:j+10000000000]),
                     # 'tile_coords':torch.Tensor(tile_coords)
                 } 
 
@@ -384,19 +390,101 @@ if __name__ == "__main__":
 
                 model_depth = DepthModel(model_alpha)
 
-                alpha_res = model_alpha(cam_inp)
-                depth_res = model_depth(cam_inp)
+                means_hom_tmp = model_alpha.means_hom_tmp.transpose(0,2)
+                cov_world = model_alpha.cov_world 
+                opacities_rast = model_alpha.opacities_rast.transpose(0,2)[:,:,0,0]
+
+                alpha_res = model_alpha(cam_inp, means_hom_tmp, cov_world, opacities_rast)
+                alpha_res = alpha_res*(-0.5)
+                alpha_res = torch.exp(alpha_res)
+                alpha_res = alpha_res*opacities_rast
+                depth_res = model_depth(cam_inp, means_hom_tmp)
+
+                alpha_res = alpha_res.transpose(0,1)[None,:,:,None]
+                depth_res = depth_res.transpose(0,1)
 
                 overall_alpha = torch.cat((overall_alpha, alpha_res), dim=2)
                 overall_depth = torch.cat((overall_depth, depth_res), dim=1)
+            # mask = (overall_depth[0,:]>0.01)&(overall_depth[0,:]<10000000000)
+            # overall_depth = overall_depth[:,mask]
+            # overall_alpha = overall_alpha[:,:,mask]
+            # colors_strip = colors_strip[mask]
             depth_order = torch.argsort(overall_depth, dim=1).squeeze()
             sorted_alpha = overall_alpha[0,:,depth_order,:]
             sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
             sorted_color = colors_strip[depth_order,:]
             rgb_color = (sorted_T * sorted_alpha * sorted_color[None]).sum(dim=1)
-            rgb_color = rgb_color.reshape(tile_size, tile_size, -1)[:,:,:3]
+            rgb_color = rgb_color.reshape(8, 8, -1)[:,:,:3]
             rgb_color = rgb_color.detach().cpu().numpy()
-            render_color[h:h+tile_size, w:w+tile_size] = rgb_color
+            render_color[h:h+8, w:w+8] = rgb_color
+    # for h in range(0, height, tile_size):
+    #     for w in range(0, width, tile_size):
+    #         over_tl = rect[0][..., 0].clip(min=w), rect[0][..., 1].clip(min=h)
+    #         over_br = rect[1][..., 0].clip(max=w+tile_size-1), rect[1][..., 1].clip(max=h+tile_size-1)
+    #         in_mask = (over_br[0] > over_tl[0]) & (over_br[1] > over_tl[1])
+    #         if not in_mask.sum() > 0:
+    #             continue
+    #         means_strip = means[in_mask]
+    #         quats_strip = quats[in_mask]
+    #         opacities_strip = opacities[in_mask]
+    #         scales_strip = scales[in_mask]
+    #         colors_strip = colors[in_mask]
+    #         # means_strip = means
+    #         # quats_strip = quats
+    #         # opacities_strip = opacities
+    #         # scales_strip = scales
+    #         # colors_strip = colors
+
+
+    #         tile_coord = pix_coord[h:h+tile_size, w:w+tile_size].flatten(0,-2)
+    #         N = means_strip.shape[0]
+
+    #         overall_alpha = torch.zeros((1,tile_size*tile_size, 0, 1)).to(means.device)
+    #         overall_depth = torch.zeros((1,0)).to(means.device)
+
+    #         for j in range(0, N, gauss_step):
+    #             data_pack = {
+    #                 'opacities': torch.Tensor(opacities_strip[j:j+gauss_step]),
+    #                 'means': torch.Tensor(means_strip[j:j+gauss_step]),
+    #                 'scales':torch.Tensor(scales_strip[j:j+gauss_step]),
+    #                 'quats':torch.Tensor(quats_strip[j:j+gauss_step]),
+    #                 # 'tile_coords':torch.Tensor(tile_coords)
+    #             } 
+
+    #             model_alpha = AlphaModel(
+    #                 data_pack = data_pack,
+    #                 fx = f,
+    #                 fy = f,
+    #                 width = width,
+    #                 height = height,
+    #                 tile_coord = tile_coord 
+    #             )
+
+    #             model_depth = DepthModel(model_alpha)
+
+    #             alpha_res = model_alpha(cam_inp)
+    #             depth_res = model_depth(cam_inp)
+
+    #             overall_alpha = torch.cat((overall_alpha, alpha_res), dim=2)
+    #             overall_depth = torch.cat((overall_depth, depth_res), dim=1)
+    #         # depth_order = torch.argsort(overall_depth, dim=1).squeeze()
+    #         # sorted_alpha = overall_alpha[0,:,depth_order,:]
+    #         # sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
+    #         # sorted_color = colors_strip[depth_order,:]
+    #         # rgb_color = (sorted_T * sorted_alpha * sorted_color[None]).sum(dim=1)
+    #         D = overall_depth[:,:,None]-overall_depth[:,None,:]
+    #         D = torch.heaviside(D, values=torch.zeros(D.shape).to(D.device))
+    #         tmp_alpha = overall_alpha.squeeze(0).squeeze(-1)
+    #         O = 1-tmp_alpha[None,:,None,:]*D[:,None]
+    #         # T = O.prod(dim=3)[0,:,:,None]
+    #         # rgb_color_T = (T*tmp_alpha[:,:,None]*colors_strip[None]).sum(dim=1)
+    #         T = torch.log(O).sum(dim=3)[0,:,:,None]
+    #         TAC = T+torch.log(tmp_alpha[:,:,None])+torch.log(colors_strip[None])
+    #         rgb_color_T_new = torch.exp(TAC).sum(dim=1)
+    #         rgb_color = rgb_color_T_new
+    #         rgb_color = rgb_color.reshape(tile_size, tile_size, -1)[:,:,:3]
+    #         rgb_color = rgb_color.detach().cpu().numpy()
+    #         render_color[h:h+tile_size, w:w+tile_size] = rgb_color
     plt.imshow(render_color)
     plt.show()
                 # inp_alpha = torch.clone(cam_inp)

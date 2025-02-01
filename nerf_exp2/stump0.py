@@ -7,15 +7,13 @@ from simple_model2_alphatest5 import AlphaModel, DepthModel, MeanModel
 from rasterization_pytorch import rasterize_gaussians_pytorch_rgb
 from scipy.spatial.transform import Rotation 
 from collections import defaultdict
-from img_helper import get_rect
-
 
 method = 'crown'
 adaptive_sampling = False 
 
-width=600
-height=400
-f = 600
+width=200
+height=200
+f = 300
 
 eps_lb = torch.Tensor([[0,0,0,-0.0001,-0.0001,-0.0001]]).to('cuda')
 eps_ub = torch.Tensor([[0,0,0,0.0001,0.0001,0.0001]]).to('cuda')
@@ -27,6 +25,34 @@ elif method == 'alpha-crown':
 threshold = tile_size_global**2*gauss_step
 initial_tilesize = 128
 
+def get_rect(
+    # Input perturbation 
+    cam_inp,
+    # Info of gaussians 
+    means,
+    scales,
+    quats,
+    # Image width and height
+    fx,
+    fy,
+    width,
+    height,
+):
+    model_mean = MeanModel(means, scales, quats, fx, fy, width, height)
+    means_hom_tmp = model_mean.means_hom_tmp.transpose(0,2)
+    means_proj_hom = model_mean(cam_inp, means_hom_tmp)
+    mask = (means_proj_hom[0,:,2]>0.01) & (means_proj_hom[0,:,2]<10000000000)
+    means2D = (means_proj_hom[:,mask,:2]/means_proj_hom[:,mask,2:]).squeeze()
+
+    radii = model_mean.get_radii(cam_inp)
+    radii = radii.squeeze()[mask]
+    rect_min = means2D-radii[:,None] 
+    rect_max = means2D+radii[:,None]
+    rect_min[..., 0] = rect_min[..., 0].clip(0, width - 1.0)
+    rect_min[..., 1] = rect_min[..., 1].clip(0, height - 1.0)
+    rect_max[..., 0] = rect_max[..., 0].clip(0, width - 1.0)
+    rect_max[..., 1] = rect_max[..., 1].clip(0, height - 1.0)
+    return (rect_min, rect_max), mask
 
 def linear_bounds(A,b,x_L, x_U):
     pos_mask = (A>=0).float() 
@@ -363,6 +389,9 @@ if __name__ == "__main__":
     scales = res['pipeline']['_model.gauss_params.scales']
     colors = torch.sigmoid(res['pipeline']['_model.gauss_params.features_dc'])
 
+    # means_tmp = torch.cat((means, torch.ones(means.shape[0],1).to('cuda')), dim=1)
+    # means_w = torch.inverse(torch.Tensor(transform_ap).to('cuda'))@means_tmp.transpose(0,1)/scale
+
     camera_pose = np.array([
                 [
                     0.9907603321392072,
@@ -449,7 +478,7 @@ if __name__ == "__main__":
     # Get all the pix_coord 
     pix_coord = torch.stack(torch.meshgrid(torch.arange(width), torch.arange(height), indexing='xy'), dim=-1).to(means.device)
     # Get the rectangles of gaussians under uncertainty 
-    rect = get_rect(
+    rect, mask = get_rect(
         cam_inp,
         means,
         scales,
@@ -459,6 +488,12 @@ if __name__ == "__main__":
         width,
         height 
     )
+    means = means[mask]
+    quats = quats[mask]
+    opacities = opacities[mask]
+    scales = scales[mask]
+    colors = colors[mask]
+
     render_color = np.zeros((*pix_coord.shape[:2], colors.shape[-1]))
     for h in range(0, height, 8):
         for w in range(0, width, 8):
@@ -485,12 +520,12 @@ if __name__ == "__main__":
             overall_alpha = torch.zeros((1,8*8, 0, 1)).to(means.device)
             overall_depth = torch.zeros((1,0)).to(means.device)
 
-            for j in range(0, N, gauss_step):
+            for j in range(0, N, 10000000000):
                 data_pack = {
-                    'opacities': torch.Tensor(opacities_strip[j:j+gauss_step]),
-                    'means': torch.Tensor(means_strip[j:j+gauss_step]),
-                    'scales':torch.Tensor(scales_strip[j:j+gauss_step]),
-                    'quats':torch.Tensor(quats_strip[j:j+gauss_step]),
+                    'opacities': torch.Tensor(opacities_strip[j:j+10000000000]),
+                    'means': torch.Tensor(means_strip[j:j+10000000000]),
+                    'scales':torch.Tensor(scales_strip[j:j+10000000000]),
+                    'quats':torch.Tensor(quats_strip[j:j+10000000000]),
                     # 'tile_coords':torch.Tensor(tile_coords)
                 } 
 
@@ -505,11 +540,14 @@ if __name__ == "__main__":
 
                 model_depth = DepthModel(model_alpha)
 
-                means_hom_tmp =- model_alpha.means_hom_tmp.transpose(0,2)
+                means_hom_tmp = model_alpha.means_hom_tmp.transpose(0,2)
                 cov_world = model_alpha.cov_world 
                 opacities_rast = model_alpha.opacities_rast.transpose(0,2)[:,:,0,0]
 
                 alpha_res = model_alpha(cam_inp, means_hom_tmp, cov_world, opacities_rast)
+                alpha_res = alpha_res*(-0.5)
+                alpha_res = torch.exp(alpha_res)
+                alpha_res = alpha_res*opacities_rast
                 depth_res = model_depth(cam_inp, means_hom_tmp)
 
                 alpha_res = alpha_res.transpose(0,1)[None,:,:,None]
@@ -517,6 +555,10 @@ if __name__ == "__main__":
 
                 overall_alpha = torch.cat((overall_alpha, alpha_res), dim=2)
                 overall_depth = torch.cat((overall_depth, depth_res), dim=1)
+            # mask = (overall_depth[0,:]>0.01)&(overall_depth[0,:]<10000000000)
+            # overall_depth = overall_depth[:,mask]
+            # overall_alpha = overall_alpha[:,:,mask]
+            # colors_strip = colors_strip[mask]
             depth_order = torch.argsort(overall_depth, dim=1).squeeze()
             sorted_alpha = overall_alpha[0,:,depth_order,:]
             sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)

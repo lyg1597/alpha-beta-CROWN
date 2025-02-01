@@ -4,10 +4,10 @@ from auto_LiRPA import BoundedModule, BoundedTensor, PerturbationLpNorm
 
 class InverseModel(torch.nn.Module):
     def forward(self, x):
-        x00 = x[:,0:1,0]
-        x01 = x[:,0:1,1]
-        x10 = x[:,1:2,0]
-        x11 = x[:,1:2,1]
+        x00 = x[:,:,0:1,0]
+        x01 = x[:,:,0:1,1]
+        x10 = x[:,:,1:2,0]
+        x11 = x[:,:,1:2,1]
 
         det = x00*x11-x01*x10
 
@@ -16,7 +16,7 @@ class InverseModel(torch.nn.Module):
         xinv10 = -x10/det 
         xinv11 = x00/det 
 
-        res = torch.cat([xinv00, xinv01, xinv10, xinv11], dim=1).reshape((-1,2,2))
+        res = torch.cat([xinv00, xinv01, xinv10, xinv11], dim=1).reshape((1,-1,2,2))
         return res 
 
 class EpsModel(torch.nn.Module):
@@ -71,8 +71,8 @@ class EpsModel(torch.nn.Module):
             (torch.eye(2).to(x.device)-t2)@\
             (torch.eye(2).to(x.device)+t4)@\
             (torch.eye(2).to(x.device)+t8)@\
-            (torch.eye(2).to(x.device)+t16)
-            # (torch.eye(2).to(x.device)+t32)@\
+            (torch.eye(2).to(x.device)+t16)# @\
+            # (torch.eye(2).to(x.device)+t32)
             # (torch.eye(2).to(x.device)+t64)
         
         return ft
@@ -89,25 +89,22 @@ if __name__ == "__main__":
     # ]]])
 
     A_lb = torch.Tensor([[[
-        [58951.977, -2156.779],
-        [-2156.779,  86873.53],
-    ],[
-        [96794.266, -718.9259],
-        [-718.9259,  96794.3],
-    ],[
-        [107970.2, -2156.7788],
-        [-2156.7788, 71892.664],
-    ]]])
+        [0.3158, 0.3203],
+        [0.3203, 0.3500],
+    ]],])
     A_ub = torch.Tensor([[[
-        [93460.44, 2156.7783],
-        [2156.7783, 130492.9]
-    ],[
-        [142558.67, 718.92676],
-        [718.92676, 142558.69]
-    ],[
-        [160912.1, 2156.7793],
-        [2156.7793, 104244.3],
-    ]]])
+        [0.3196, 0.3226],
+        [0.3226, 0.3508],
+    ],]])
+
+    # A_lb = torch.Tensor([[[
+    #     [60000.0, -2000.0],
+    #     [-2000.0,  90000.0],
+    # ]]])
+    # A_ub = torch.Tensor([[[
+    #     [90000.0, 2000.0],
+    #     [2000.0, 130000.0]
+    # ]]])
     # A_lb = torch.Tensor([[[
     #     [0.9,-0.1],
     #     [-0.1,0.9]
@@ -120,7 +117,7 @@ if __name__ == "__main__":
     A0 = ((A_lb+A_ub)/2).squeeze(0)
     A0inv = torch.inverse(A0)
     delta = (A_ub-A_lb)/2
-    eps = torch.norm(delta@A0inv)
+    eps = torch.norm(delta@A0inv, dim=(2,3))
     print(eps)
     delta0 = torch.zeros(delta.shape)
 
@@ -148,21 +145,19 @@ if __name__ == "__main__":
     # if eps>1:
     #     print("EPS constraint Violated")
 
-    T = torch.norm(A0inv)*eps**16/(1-eps)
+    T = torch.norm(A0inv, dim=(1,2))*eps**16/(1-eps)
+    T_mat = T[:,:,None,None]*torch.Tensor([
+        [1, 1/np.sqrt(2)],
+        [1/np.sqrt(2), 1]
+    ])[None,None]
     print(T)
 
-    res_lb = lb_eps-torch.Tensor([[
-        [T, T/np.sqrt(2)],
-        [T/np.sqrt(2), T]
-    ]])
-    res_ub = ub_eps+torch.Tensor([[
-        [T, T/np.sqrt(2)],
-        [T/np.sqrt(2), T]
-    ]])
-    print("ours: ", res_lb, res_ub)
+    res_lb = lb_eps-T_mat
+    res_ub = ub_eps+T_mat
 
     res_lb = res_lb.detach().cpu().numpy()
     res_ub = res_ub.detach().cpu().numpy()
+    print("ours: ", res_lb, res_ub, np.linalg.norm(res_ub-res_lb))
 
     modelinv = InverseModel()
     ptb_A = PerturbationLpNorm(
@@ -170,10 +165,12 @@ if __name__ == "__main__":
         x_L = A_lb, 
         x_U = A_ub,  
     )
-    inp_A = BoundedTensor(A0, ptb_A)
-    model_bounded = BoundedModule(modelinv, delta0, device = 'cpu', bound_opts={'conv_mode': 'matrix'})
+    inp_A = BoundedTensor(A0[None], ptb_A)
+    model_bounded = BoundedModule(modelinv, inp_A, device = 'cpu', bound_opts={'conv_mode': 'matrix'})
     lb_inv, ub_inv = model_bounded.compute_bounds(x=(inp_A, ), method='alpha-crown')
-    print("crown: ", lb_inv, ub_inv)
+    lb_inv = lb_inv.detach().cpu().numpy()
+    ub_inv = ub_inv.detach().cpu().numpy()
+    print("crown: ", lb_inv, ub_inv, np.linalg.norm(ub_inv-lb_inv))
 
 
     A_lb = A_lb.detach().cpu().numpy()
@@ -187,5 +184,8 @@ if __name__ == "__main__":
         emp_ub = np.maximum(emp_ub, Ainv)
         # if np.any(Ainv<res_lb) or np.any(Ainv>res_ub):
         #     print("bound violated")
-    print("emp: ", emp_lb, emp_ub)
+    print("emp: ", emp_lb, emp_ub, np.linalg.norm(emp_ub-emp_lb))
+    
+
+
 

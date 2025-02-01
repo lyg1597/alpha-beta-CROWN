@@ -532,7 +532,7 @@ def rasterize_gaussians_pytorch_rgb(
         near_plane=0.01, 
         far_plane=1e10, 
         sh_degree=3, 
-        tile_size=16,
+        tile_size=8,
         eps2d = 0.3,
         radius_clip = 0.0
     ):
@@ -640,7 +640,7 @@ def rasterize_gaussians_pytorch_rgb(
     # N = means2D.size(0)  # Update N after masking
 
     # mask out gaussians outside the image region
-    mask = (means2D[:,0]+radius>0) & (means2D[:,0]-radius<width) & (means2D[:,1]+radius>0) & (means2D[:,1]-radius<height)
+    # mask = (means2D[:,0]+radius>0) & (means2D[:,0]-radius<width) & (means2D[:,1]+radius>0) & (means2D[:,1]-radius<height)
     overall_mask = overall_mask & mask 
     means = means[overall_mask]
     means_cam = means_cam[overall_mask]

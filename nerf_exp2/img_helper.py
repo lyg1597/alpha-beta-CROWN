@@ -19,10 +19,11 @@ def get_rect(
     height,
 ):
     model_mean = MeanModel(means, scales, quats, fx, fy, width, height)
-    means_proj_hom = model_mean(cam_inp)
+    means_hom_tmp = model_mean.means_hom_tmp
+    means_proj_hom = model_mean(means_hom_tmp, cam_inp)
     means2D = (means_proj_hom[:,:,:2]/means_proj_hom[:,:,2:]).squeeze()
 
-    radii = model_mean.get_radii(cam_inp)
+    radii = model_mean.get_radii(means_hom_tmp, cam_inp)
     radii = radii.squeeze()
     rect_min = means2D-radii[:,None] 
     rect_max = means2D+radii[:,None]

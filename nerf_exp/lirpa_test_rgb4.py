@@ -386,8 +386,8 @@ if __name__ == "__main__":
     # ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     ptb_alpha = PerturbationLpNorm(
         norm=np.inf, 
-        x_L=torch.Tensor([[-0.0,-0.0,-0.0,-1.0,-1.0,-1.0]]).to(model_alpha.device),
-        x_U=torch.Tensor([[0.0,0.0,0.0,1.0,1.0,1.0]]).to(model_alpha.device),
+        x_L=torch.Tensor([[-0.1,-0.1,-0.1,-0.2,-0.2,-0.2]]).to(model_alpha.device),
+        x_U=torch.Tensor([[0.1,0.1,0.1,0.2,0.2,0.2]]).to(model_alpha.device),
     )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb_alpha)
@@ -410,8 +410,8 @@ if __name__ == "__main__":
     # ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     ptb_depth = PerturbationLpNorm(
         norm=np.inf, 
-        x_L=torch.Tensor([[-0.0,-0.0,-0.0,-1.0,-1.0,-1.0]]).to(model_depth.device),
-        x_U=torch.Tensor([[0.0,0.0,0.0,1.0,1.0,1.0]]).to(model_depth.device),
+        x_L=torch.Tensor([[-0.1,-0.1,-0.1,-0.2,-0.2,-0.2]]).to(model_depth.device),
+        x_U=torch.Tensor([[0.1,0.1,0.1,0.2,0.2,0.2]]).to(model_depth.device),
     )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb_depth)
@@ -467,8 +467,8 @@ if __name__ == "__main__":
         tmp_input = my_input.repeat(1,1)
         delta = torch.zeros((1,6))
         # delta[:,:3,3] = torch.rand((1,3))*eps*2-eps
-        delta[:,:3] = torch.rand((1,3))*0.0*2-0.0
-        delta[:,3:] = torch.rand((1,3))*1.0*2-1.0
+        delta[:,:3] = torch.rand((1,3))*0.1*2-0.1
+        delta[:,3:] = torch.rand((1,3))*0.2*2-0.2
         delta = delta.to(model_depth.device)
         tmp_input = tmp_input+delta 
         res_alpha = model_alpha(tmp_input)

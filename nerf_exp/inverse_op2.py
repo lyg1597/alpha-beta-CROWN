@@ -101,12 +101,19 @@ class BoundInverse(Bound):
         A0 = (A_lb+A_ub)/2
         delta = (A_ub-A_lb)/2
         A0inv = torch.inverse(A0).squeeze()
-        val = torch.norm(delta@A0inv)   
-        T = torch.norm(A0inv)*val**16/(1-val)
-        T_mat = torch.Tensor([[
-            [T, T/np.sqrt(2)],
-            [T/np.sqrt(2), T]
-        ]]).to(A0.device)
+        # val_old = torch.norm(delta@A0inv)   
+        # T_old = torch.norm(A0inv)*val_old**16/(1-val_old)
+        # T_mat_old = torch.Tensor([[
+        #     [T_old, T_old/np.sqrt(2)],
+        #     [T_old/np.sqrt(2), T_old]
+        # ]]).to(A0.device)
+        val = torch.norm(delta@A0inv, dim=(2,3))   
+        T = torch.norm(A0inv, dim=(1,2))*val**16/(1-val)
+        mask = torch.Tensor([
+            [1, 1/np.sqrt(2)],
+            [1/np.sqrt(2), 1]
+        ]).to(A0.device)
+        T_mat = T[:,:,None,None]*mask[None,None]
 
         # model_inverse_lb = InverseModelLb(A0)
         # model_inverse_ub = InverseModelUb(A0)
@@ -164,7 +171,7 @@ class BoundInverse(Bound):
             lA = torch.einsum('ijk,jkabc->ijabc', last_lA_view, EpsAlb_const)
             lbias = -torch.einsum("xyzuv,zuv->xy", lA, A0_const)
             lbias = lbias+torch.einsum('ixa,xa->ix', last_lA_view, Epsbiaslb_const)
-            lbias = lbias-torch.einsum('ixabc,abc->ix', last_lA, T_mat_const)
+            lbias = lbias-torch.einsum('ixabc,xabc->ix', last_lA, T_mat_const)
             
         if last_uA is None:
             uA = None 
@@ -174,7 +181,7 @@ class BoundInverse(Bound):
             uA = torch.einsum('ijk,jkabc->ijabc', last_uA_view, EpsAub_const)
             ubias = -torch.einsum("xyzuv,zuv->xy", uA, A0_const)
             ubias = ubias+torch.einsum('ixa,xa->ix', last_uA_view, Epsbiasub_const)
-            ubias = ubias-torch.einsum('ixabc,abc->ix', last_uA, T_mat_const)
+            ubias = ubias-torch.einsum('ixabc,xabc->ix', last_uA, T_mat_const)
 
         return [(lA, uA)], lbias, ubias
 

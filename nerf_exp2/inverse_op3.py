@@ -120,26 +120,27 @@ class BoundInverse(Bound):
         # model_inverse_ub = InverseModelUb(A0)
         eps_model = EpsModel(A0inv, device = A0inv.device)
     
+        tmp = torch.zeros(delta.shape,device=eps_model.device)
         ptb_delta = PerturbationLpNorm(
             norm=np.inf, 
             x_L=-delta.to(eps_model.device),
             x_U=delta.to(eps_model.device),
         )
-        my_input = BoundedTensor(A0, ptb_delta)
+        my_input = BoundedTensor(tmp, ptb_delta)
         model_eps_bounded = BoundedModule(
-            eps_model, (A0, A0inv), 
+            eps_model, (tmp, A0inv), 
             device=eps_model.device, 
             bound_opts={
                 'conv_mode': 'matrix', 
-                'optimize_bound_args': {'iteration': 10}
+                # 'optimize_bound_args': {'iteration': 10}
             },
         )
         required_A = defaultdict(set)
         required_A[model_eps_bounded.output_name[0]].add(model_eps_bounded.input_name[0])
-        with torch.no_grad():
-            lb_eps, ub_eps, A_eps = model_eps_bounded.compute_bounds(
-                x=(my_input, A0inv), method='crown', return_A=True, needed_A_dict=required_A,
-            )
+        # with torch.no_grad():
+        lb_eps, ub_eps, A_eps = model_eps_bounded.compute_bounds(
+            x=(my_input, A0inv), method='crown', return_A=True, needed_A_dict=required_A,
+        )
         # if True:
         # if self.counter%30==0 or self.stored_bounds is None or torch.any(A_lb<self.stored_inp_lb) or torch.any(A_ub>self.stored_inp_ub):
         #     print(f"####### Bound Backward Inverse Alpha: {self.counter}, {self.alpha_counter}")
@@ -210,10 +211,10 @@ class BoundInverse(Bound):
             x_U=delta.to(eps_model.device),
         )
         my_input = BoundedTensor(torch.zeros(delta.shape).to(delta.device), ptb_delta)
-        model_eps_bounded = BoundedModule(eps_model, A0, device=eps_model.device, bound_opts={'conv_mode': 'matrix'})
+        model_eps_bounded = BoundedModule(eps_model, (A0, A0inv), device=eps_model.device, bound_opts={'conv_mode': 'matrix'})
         required_A = defaultdict(set)
         required_A[model_eps_bounded.output_name[0]].add(model_eps_bounded.input_name[0])
-        lb_eps, ub_eps = model_eps_bounded.compute_bounds(x=(my_input, ), method='ibp') 
+        lb_eps, ub_eps = model_eps_bounded.compute_bounds(x=(my_input, A0inv), method='ibp') 
 
         lb_eps = lb_eps - T_mat 
         ub_eps = ub_eps + T_mat
@@ -273,25 +274,13 @@ if __name__ == "__main__":
     #     [2156.7793, 104244.3],
     # ]]]).to('cuda')
     A_lb = torch.Tensor([[
-        [0.9, -0.1],
-        [-0.1, 0.9],
-    ],[
-        [0.9, -0.1],
-        [-0.1, 0.9],
-    ],[
-        [0.9, -0.1],
-        [-0.1, 0.9],
-    ]]).to('cuda')
+        [0.3158, 0.3203],
+        [0.3203, 0.3500],
+    ],]).to('cuda')
     A_ub = torch.Tensor([[
-        [1.1, 0.1],
-        [0.1, 1.1],
-    ],[
-        [1.1, 0.1],
-        [0.1, 1.1],
-    ],[
-        [1.1, 0.1],
-        [0.1, 1.1],
-    ]]).to('cuda')
+        [0.3196, 0.3226],
+        [0.3226, 0.3508],
+    ],]).to('cuda')
     
     # A_lb = torch.Tensor([[[
     #     [58951.977, -2156.779],

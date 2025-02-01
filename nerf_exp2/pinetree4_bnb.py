@@ -249,8 +249,8 @@ def compute_tile_color(
             bound_opts= {
                 'conv_mode': 'matrix',
                 'optimize_bound_args': {
-                    'iteration': 100, 
-                    # 'lr_alpha':0.02, 
+                    'iteration': 500, 
+                    'lr_alpha':0.02, 
                     'early_stop_patience':5},
             }, 
         )
@@ -263,7 +263,21 @@ def compute_tile_color(
         inp_alpha = BoundedTensor(inp_alpha, ptb_alpha)
         # prediction = model_alpha_bounded(inp_alpha)
         # tmp = time.time()
-        lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(inp_alpha, means_hom_tmp, cov_world, opacities_rast), method='crown')
+        tmp_lb_alpha, tmp_ub_alpha = model_alpha_bounded.compute_bounds(
+            x=(inp_alpha, means_hom_tmp, cov_world, opacities_rast), 
+            method='crown'
+        )
+        tmp_lb_alpha2 = torch.minimum(tmp_lb_alpha, tmp_ub_alpha)
+        tmp_ub_alpha2 = torch.maximum(tmp_lb_alpha, tmp_ub_alpha)
+        # lb_alpha = tmp_lb_alpha
+        # ub_alpha = tmp_ub_alpha
+        lb_alpha = -tmp_ub_alpha2*0.5
+        ub_alpha = -tmp_lb_alpha2*0.5
+        lb_alpha = torch.exp(lb_alpha)
+        ub_alpha = torch.exp(ub_alpha)
+        ub_alpha = ub_alpha.clip(max=1.0)
+        lb_alpha = lb_alpha*opacities_rast
+        ub_alpha = ub_alpha*opacities_rast
         # print(f'time for compute bound {time.time()-tmp}')
         # bounds_alpha = torch.cat((lb_alpha, ub_alpha), dim=0)
         lb_alpha = lb_alpha.transpose(0,1)[None,:,:,None]
@@ -476,100 +490,101 @@ if __name__ == "__main__":
                     for w in range(0, width, initial_tilesize) for h in range(0, height, initial_tilesize)
                 ]
                 # Implement adaptive tile size 
-                # while queue!=[]:
-                #     hbl,wbl,htr,wtr,tile_size = queue[-1]
-                #     queue.pop()
-                #     over_tl = rect[0][..., 0].clip(min=wbl), rect[0][..., 1].clip(min=hbl)
-                #     over_br = rect[1][..., 0].clip(max=wtr-1), rect[1][..., 1].clip(max=htr-1)
-                #     in_mask = (over_br[0] >= over_tl[0]) & (over_br[1] >= over_tl[1])
-                #     if not in_mask.sum() > 0:
-                #         continue
-                #     N = torch.where(in_mask)[0].shape[0]
-                #     # If tile size too large or too much gaussians 
-                #     if tile_size**2*N>threshold and tile_size>tile_size_global:
-                #         if tile_size == 1:
-                #             raise ValueError(f"Tile size can't be partitioned anymore, too many gaussians to be handled for ({hbl}, {wbl}), ({htr}, {wtr})")
-                #         tile_size = tile_size//2 
-                #         new_partitions = [
-                #             (h,w,min(h+tile_size, htr),min(w+tile_size, wtr), tile_size) \
-                #             for w in range(wbl, wtr, tile_size) for h in range(hbl, htr, tile_size)
-                #         ]
-                #         queue = queue+new_partitions 
-                #         continue 
-                #     means_strip = means[in_mask]
-                #     quats_strip = quats[in_mask]
-                #     opacities_strip = opacities[in_mask]
-                #     scales_strip = scales[in_mask]
-                #     colors_strip = colors[in_mask]
-                #     print(f">>>>>>>> {hbl}, {wbl}, {htr}, {wtr}, {means_strip.shape[0]}")
+                while queue!=[]:
+                    hbl,wbl,htr,wtr,tile_size = queue[-1]
+                    queue.pop()
+                    over_tl = rect[0][..., 0].clip(min=wbl), rect[0][..., 1].clip(min=hbl)
+                    over_br = rect[1][..., 0].clip(max=wtr-1), rect[1][..., 1].clip(max=htr-1)
+                    in_mask = (over_br[0] >= over_tl[0]) & (over_br[1] >= over_tl[1])
+                    if not in_mask.sum() > 0:
+                        continue
+                    N = torch.where(in_mask)[0].shape[0]
+                    # If tile size too large or too much gaussians 
+                    if tile_size**2*N>threshold and tile_size>tile_size_global:
+                        if tile_size == 1:
+                            raise ValueError(f"Tile size can't be partitioned anymore, too many gaussians to be handled for ({hbl}, {wbl}), ({htr}, {wtr})")
+                        tile_size = tile_size//2 
+                        new_partitions = [
+                            (h,w,min(h+tile_size, htr),min(w+tile_size, wtr), tile_size) \
+                            for w in range(wbl, wtr, tile_size) for h in range(hbl, htr, tile_size)
+                        ]
+                        queue = queue+new_partitions 
+                        continue 
+                    means_strip = means[in_mask]
+                    quats_strip = quats[in_mask]
+                    opacities_strip = opacities[in_mask]
+                    scales_strip = scales[in_mask]
+                    colors_strip = colors[in_mask]
+                    print(f">>>>>>>> {hbl}, {wbl}, {htr}, {wtr}, {means_strip.shape[0]}")
 
-                #     tile_color_lb, tile_color_ub = compute_tile_color(
-                #         cam_inp,
-                #         eps,
-                #         means_strip,
-                #         opacities_strip,
-                #         scales_strip,
-                #         quats_strip,
-                #         colors_strip,
-                #         f,
-                #         wbl,
-                #         hbl,
-                #         wtr,
-                #         htr,
-                #         width,
-                #         height,
-                #         pix_coord,
-                #         tile_size,
-                #         gauss_step
-                #     )
-                #     render_color_lb[hbl:htr, wbl:wtr] = tile_color_lb
-                #     render_color_ub[hbl:htr, wbl:wtr] = tile_color_ub
-                #     plt.imshow(render_color_lb)
-                #     plt.savefig('res_lb.png')
-                #     plt.imshow(render_color_ub)
-                #     plt.savefig('res_ub.png')
+                    tile_color_lb, tile_color_ub = compute_tile_color(
+                        cam_inp,
+                        eps_lb,
+                        eps_ub,
+                        means_strip,
+                        opacities_strip,
+                        scales_strip,
+                        quats_strip,
+                        colors_strip,
+                        f,
+                        wbl,
+                        hbl,
+                        wtr,
+                        htr,
+                        width,
+                        height,
+                        pix_coord,
+                        tile_size_global,
+                        gauss_step
+                    )
+                    render_color_lb[hbl:htr, wbl:wtr] = tile_color_lb
+                    render_color_ub[hbl:htr, wbl:wtr] = tile_color_ub
+                    # plt.imshow(render_color_lb)
+                    # plt.savefig('res_lb.png')
+                    # plt.imshow(render_color_ub)
+                    # plt.savefig('res_ub.png')
                     
 
-                for h in range(0, height, tile_size_global):
-                    for w in range(0, width, tile_size_global):
-                        # if h!=8 or w!=0:
-                        #     continue
-                        # if h>24:
-                        #     continue
-                        over_tl = rect[0][..., 0].clip(min=w), rect[0][..., 1].clip(min=h)
-                        over_br = rect[1][..., 0].clip(max=w+tile_size_global-1), rect[1][..., 1].clip(max=h+tile_size_global-1)
-                        in_mask = (over_br[0] >= over_tl[0]) & (over_br[1] >= over_tl[1])
-                        if not in_mask.sum() > 0:
-                            continue
-                        means_strip = means[in_mask]
-                        quats_strip = quats[in_mask]
-                        opacities_strip = opacities[in_mask]
-                        scales_strip = scales[in_mask]
-                        colors_strip = colors[in_mask]
-                        print(f">>>>>>>> {h}, {w}, {means_strip.shape[0]}")
+                # for h in range(0, height, tile_size_global):
+                #     for w in range(0, width, tile_size_global):
+                #         # if h!=8 or w!=0:
+                #         #     continue
+                #         # if h>24:
+                #         #     continue
+                #         over_tl = rect[0][..., 0].clip(min=w), rect[0][..., 1].clip(min=h)
+                #         over_br = rect[1][..., 0].clip(max=w+tile_size_global-1), rect[1][..., 1].clip(max=h+tile_size_global-1)
+                #         in_mask = (over_br[0] > over_tl[0]) & (over_br[1] > over_tl[1])
+                #         if not in_mask.sum() > 0:
+                #             continue
+                #         means_strip = means[in_mask]
+                #         quats_strip = quats[in_mask]
+                #         opacities_strip = opacities[in_mask]
+                #         scales_strip = scales[in_mask]
+                #         colors_strip = colors[in_mask]
+                #         print(f">>>>>>>> {h}, {w}, {means_strip.shape[0]}")
 
-                        tile_color_lb, tile_color_ub = compute_tile_color(
-                            cam_inp,
-                            eps_lb,
-                            eps_ub,
-                            means_strip,
-                            opacities_strip,
-                            scales_strip,
-                            quats_strip,
-                            colors_strip,
-                            f,
-                            w,
-                            h,
-                            w+tile_size_global,
-                            h+tile_size_global,
-                            width,
-                            height,
-                            pix_coord,
-                            tile_size_global,
-                            gauss_step
-                        )
-                        render_color_lb[h:h+tile_size_global, w:w+tile_size_global] = tile_color_lb
-                        render_color_ub[h:h+tile_size_global, w:w+tile_size_global] = tile_color_ub
+                #         tile_color_lb, tile_color_ub = compute_tile_color(
+                #             cam_inp,
+                #             eps_lb,
+                #             eps_ub,
+                #             means_strip,
+                #             opacities_strip,
+                #             scales_strip,
+                #             quats_strip,
+                #             colors_strip,
+                #             f,
+                #             w,
+                #             h,
+                #             w+tile_size_global,
+                #             h+tile_size_global,
+                #             width,
+                #             height,
+                #             pix_coord,
+                #             tile_size_global,
+                #             gauss_step
+                #         )
+                #         render_color_lb[h:h+tile_size_global, w:w+tile_size_global] = tile_color_lb
+                #         render_color_ub[h:h+tile_size_global, w:w+tile_size_global] = tile_color_ub
                 #         plt.imshow(render_color_lb)
                 #         plt.savefig('res_lb.png')
                 #         plt.imshow(render_color_ub)

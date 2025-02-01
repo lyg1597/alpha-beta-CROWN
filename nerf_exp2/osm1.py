@@ -8,6 +8,29 @@ from rasterization_pytorch import rasterize_gaussians_pytorch_rgb
 from scipy.spatial.transform import Rotation 
 from collections import defaultdict
 
+dt = {
+    "transform": [
+        [
+            0.9999805688858032,
+            -0.004387019667774439,
+            -0.004431084264069796,
+            -0.17920809984207153
+        ],
+        [
+            -0.004387019667774439,
+            0.010003387928009033,
+            -0.9999403953552246,
+            -1.9760571718215942
+        ],
+        [
+            0.004431084264069796,
+            0.9999403953552246,
+            0.00998389720916748,
+            -73.62712860107422
+        ]
+    ],
+    "scale": 0.004533926584786731
+}
 
 method = 'crown'
 adaptive_sampling = False 
@@ -16,16 +39,16 @@ width=48
 height=48
 f = 80
 
-eps_lb = torch.Tensor([[0,0,0,-0.0001,-0.0001,-0.0001]]).to('cuda')
-eps_ub = torch.Tensor([[0,0,0,0.0001,0.0001,0.0001]]).to('cuda')
-tile_size_global = 8
+eps_lb = torch.Tensor([[0,0,0,0,0,0]]).to('cuda')
+eps_ub = torch.Tensor([[0,0,0,0.01*dt['scale'],0.01*dt['scale'],0.01*dt['scale']]]).to('cuda')
+# eps_ub = torch.Tensor([[0,0,0,0,0,0]]).to('cuda')
+tile_size_global = 10
 if method == 'ibp' or method=='crown':
     gauss_step = 10000
 elif method == 'alpha-crown':
     gauss_step = 1500
 threshold = tile_size_global**2*gauss_step
 initial_tilesize = 128
-
 
 def linear_bounds(A,b,x_L, x_U):
     pos_mask = (A>=0).float() 
@@ -148,11 +171,11 @@ def get_rect_set(
 
     lb_mean = lb_mean.squeeze()
     ub_mean = ub_mean.squeeze()
-    mask = ub_mean[:,2]>=1e-8
+    mask = (lb_mean[:,2]>0.01) & (ub_mean[:,2]<10000000000)
     lb_mean = lb_mean[mask]
     ub_mean = ub_mean[mask]
-    lb_mean = lb_mean.clip(min=1e-8)
-    ub_mean = ub_mean.clip(min=1e-8)
+    # lb_mean = lb_mean.clip(min=1e-8)
+    # ub_mean = ub_mean.clip(min=1e-8)
     lb_mean2D = lb_mean[:,:2]/ub_mean[:,2:]
     ub_mean2D = ub_mean[:,:2]/lb_mean[:,2:]
 
@@ -165,30 +188,6 @@ def get_rect_set(
     rect_max[..., 0] = rect_max[..., 0].clip(0, width - 1.0)
     rect_max[..., 1] = rect_max[..., 1].clip(0, height - 1.0)
     return (rect_min, rect_max), mask 
-
-dt = {
-    "transform": [
-        [
-            0.9999805688858032,
-            -0.004387019667774439,
-            -0.004431084264069796,
-            -0.17920809984207153
-        ],
-        [
-            -0.004387019667774439,
-            0.010003387928009033,
-            -0.9999403953552246,
-            -1.9760571718215942
-        ],
-        [
-            0.004431084264069796,
-            0.9999403953552246,
-            0.00998389720916748,
-            -73.62712860107422
-        ]
-    ],
-    "scale": 0.004533926584786731
-}
 
 def compute_tile_color(
     # Input info
@@ -276,10 +275,24 @@ def compute_tile_color(
         inp_alpha = BoundedTensor(inp_alpha, ptb_alpha)
         # prediction = model_alpha_bounded(inp_alpha)
         # tmp = time.time()
-        lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(
+        tmp_lb_alpha, tmp_ub_alpha = model_alpha_bounded.compute_bounds(
             x=(inp_alpha, means_hom_tmp, cov_world, opacities_rast), 
             method=method
         )
+        # tmp_lb_alpha_emp = torch.zeros(tmp_lb_alpha.shape, device = tmp_lb_alpha.device)+1e10
+        # tmp_ub_alpha_emp = torch.zeros(tmp_ub_alpha.shape, device = tmp_ub_alpha.device)-1e10
+        
+        tmp_lb_alpha2 = torch.minimum(tmp_lb_alpha, tmp_ub_alpha)
+        tmp_ub_alpha2 = torch.maximum(tmp_lb_alpha, tmp_ub_alpha)
+        # lb_alpha = tmp_lb_alpha
+        # ub_alpha = tmp_ub_alpha
+        lb_alpha = -tmp_ub_alpha2*0.5
+        ub_alpha = -tmp_lb_alpha2*0.5
+        lb_alpha = torch.exp(lb_alpha)
+        ub_alpha = torch.exp(ub_alpha)
+        ub_alpha = ub_alpha.clip(max=1.0)
+        lb_alpha = lb_alpha*opacities_rast
+        ub_alpha = ub_alpha*opacities_rast
         # print(f'time for compute bound {time.time()-tmp}')
         # bounds_alpha = torch.cat((lb_alpha, ub_alpha), dim=0)
         lb_alpha = lb_alpha.transpose(0,1)[None,:,:,None]
@@ -288,6 +301,7 @@ def compute_tile_color(
         overall_alpha_ub = torch.cat((overall_alpha_ub, ub_alpha), dim=2)
         overall_alpha_lb = overall_alpha_lb.clip(min=0.0, max=0.99)
         overall_alpha_ub = overall_alpha_ub.clip(min=0.0, max=0.99)
+
 
         inp_depth = torch.clone(cam_inp).repeat(BS, 1)
         # print(">>>>>> Starting Bounded Module")
@@ -373,20 +387,20 @@ if __name__ == "__main__":
         [
             0.0,
             0.0,
+            1.0,
+            160.0,
+        ],
+        [
+            0.0,
+            1.0,
+            0.0,
+            4.5,
+        ],
+        [
             -1.0,
-            -160.0,
-        ],
-        [
-            0.0,
-            1.0,
-            0.0,
-            10.0,
-        ],
-        [
-            1.0,
             0.0,
             0.0,
-            0.0
+            -0.1
         ],
         [
             0.0,
@@ -434,7 +448,8 @@ if __name__ == "__main__":
     #         view_mats, 
     #         Ks,
     #         width,
-    #         height
+    #         height,
+    #         eps2d = 0
     #     )
     # res_rgb = res['render']
     # print(res_rgb.shape)
@@ -482,7 +497,7 @@ if __name__ == "__main__":
         queue.pop(0)
         over_tl = rect[0][..., 0].clip(min=wbl), rect[0][..., 1].clip(min=hbl)
         over_br = rect[1][..., 0].clip(max=wtr-1), rect[1][..., 1].clip(max=htr-1)
-        in_mask = (over_br[0] >= over_tl[0]) & (over_br[1] >= over_tl[1])
+        in_mask = (over_br[0] > over_tl[0]) & (over_br[1] > over_tl[1])
         if not in_mask.sum() > 0:
             continue
         N = torch.where(in_mask)[0].shape[0]
@@ -526,10 +541,10 @@ if __name__ == "__main__":
         )
         render_color_lb[hbl:htr, wbl:wtr] = tile_color_lb
         render_color_ub[hbl:htr, wbl:wtr] = tile_color_ub
-        plt.imshow(render_color_lb)
-        plt.savefig('res_lb.png')
-        plt.imshow(render_color_ub)
-        plt.savefig('res_ub.png')
+        # plt.imshow(render_color_lb)
+        # plt.savefig('res_lb.png')
+        # plt.imshow(render_color_ub)
+        # plt.savefig('res_ub.png')
         
 
     # for h in range(0, height, tile_size_global):
@@ -581,3 +596,17 @@ if __name__ == "__main__":
     # plt.figure(2)
     # plt.imshow(render_color_ub)
     # plt.show()
+    from PIL import Image 
+    render_color_lb = (render_color_lb.clip(min=0.0, max=1.0)*255).astype(np.uint8)
+    render_color_ub = (render_color_ub.clip(min=0.0, max=1.0)*255).astype(np.uint8)
+    res_lb = Image.fromarray(render_color_lb)
+    res_ub = Image.fromarray(render_color_ub)
+    new_width = width*5
+    new_height = height*5 
+    res_lb_enlarged = res_lb.resize((new_width, new_height), Image.NEAREST)
+    res_ub_enlarged = res_ub.resize((new_width, new_height), Image.NEAREST)
+    res_lb_enlarged.save('osm1_lb.png')
+    res_ub_enlarged.save('osm1_ub.png')
+
+    print(f">>>>>>> {eps_lb}, {eps_ub}, mean_diff {np.mean(np.linalg.norm(render_color_ub-render_color_lb,axis=2))}, max_diff {np.max(np.linalg.norm(render_color_ub-render_color_lb,axis=2))}")
+    

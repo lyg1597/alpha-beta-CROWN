@@ -179,17 +179,17 @@ class AlphaModel(torch.nn.Module):
         gamma = x[:,0:1]
         beta = x[:,1:2]
         alpha = x[:,2:3]
-        R00 = torch.cos(beta)*torch.cos(gamma)
-        R01 = torch.sin(alpha)*torch.sin(beta)*torch.cos(gamma)-torch.cos(alpha)*torch.sin(gamma)
+        R00 = torch.cos(alpha)*torch.cos(beta)
+        R01 = torch.cos(alpha)*torch.sin(beta)*torch.sin(gamma)-torch.sin(alpha)*torch.cos(gamma)
         R02 = torch.cos(alpha)*torch.sin(beta)*torch.cos(gamma)+torch.sin(alpha)*torch.sin(gamma)
         R03 = x[:,3:4]
-        R10 = torch.cos(beta)*torch.sin(gamma)
+        R10 = torch.sin(alpha)*torch.cos(beta)
         R11 = torch.sin(alpha)*torch.sin(beta)*torch.sin(gamma)+torch.cos(alpha)*torch.cos(gamma)
-        R12 = torch.cos(alpha)*torch.sin(beta)*torch.sin(gamma)-torch.sin(alpha)*torch.cos(gamma)
+        R12 = torch.sin(alpha)*torch.sin(beta)*torch.cos(gamma)-torch.cos(alpha)*torch.sin(gamma)
         R13 = x[:,4:5]
         R20 = -torch.sin(beta)
-        R21 = torch.sin(alpha)*torch.cos(beta)
-        R22 = torch.cos(alpha)*torch.cos(beta)
+        R21 = torch.cos(beta)*torch.sin(gamma)
+        R22 = torch.cos(beta)*torch.cos(gamma)
         R23 = x[:,5:6]
         combined = torch.cat([R00, R01, R02, R03, R10, R11, R12, R13, R20, R21, R22, R23], dim=1)
         result = combined.view(-1, 3, 4)
@@ -346,17 +346,17 @@ class DepthModel(torch.nn.Module):
         gamma = x[:,0:1]
         beta = x[:,1:2]
         alpha = x[:,2:3]
-        R00 = torch.cos(beta)*torch.cos(gamma)
-        R01 = torch.sin(alpha)*torch.sin(beta)*torch.cos(gamma)-torch.cos(alpha)*torch.sin(gamma)
+        R00 = torch.cos(alpha)*torch.cos(beta)
+        R01 = torch.cos(alpha)*torch.sin(beta)*torch.sin(gamma)-torch.sin(alpha)*torch.cos(gamma)
         R02 = torch.cos(alpha)*torch.sin(beta)*torch.cos(gamma)+torch.sin(alpha)*torch.sin(gamma)
         R03 = x[:,3:4]
-        R10 = torch.cos(beta)*torch.sin(gamma)
+        R10 = torch.sin(alpha)*torch.cos(beta)
         R11 = torch.sin(alpha)*torch.sin(beta)*torch.sin(gamma)+torch.cos(alpha)*torch.cos(gamma)
-        R12 = torch.cos(alpha)*torch.sin(beta)*torch.sin(gamma)-torch.sin(alpha)*torch.cos(gamma)
+        R12 = torch.sin(alpha)*torch.sin(beta)*torch.cos(gamma)-torch.cos(alpha)*torch.sin(gamma)
         R13 = x[:,4:5]
         R20 = -torch.sin(beta)
-        R21 = torch.sin(alpha)*torch.cos(beta)
-        R22 = torch.cos(alpha)*torch.cos(beta)
+        R21 = torch.cos(beta)*torch.sin(gamma)
+        R22 = torch.cos(beta)*torch.cos(gamma)
         R23 = x[:,5:6]
         combined = torch.cat([R00, R01, R02, R03, R10, R11, R12, R13, R20, R21, R22, R23], dim=1)
         result = combined.view(-1, 3, 4)

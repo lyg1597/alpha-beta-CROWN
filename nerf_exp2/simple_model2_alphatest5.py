@@ -179,6 +179,7 @@ class AlphaModel(torch.nn.Module):
         # Step 5: Project means onto the image plane
         means_proj_hom = means_cam @ self.K.t()
         z0 = means_proj_hom[:,:,2:3]
+        # mask = (z0>0.01) & (z0<10000000000)
         # means2D = means_proj_hom[:, :, :2] / means_proj_hom[:, :, 2:3]  # [N, 2]
         means2D = means_proj_hom[:, :, :2]
         # return means_proj_hom 
@@ -195,8 +196,8 @@ class AlphaModel(torch.nn.Module):
         y = means_cam[:, :, 1]
         z_cam = means_cam[:, :, 2]
 
-        tx = torch.min(z_cam*self.lim_x, torch.max(-z_cam*self.lim_x, x))
-        ty = torch.min(z_cam*self.lim_y, torch.max(-z_cam*self.lim_y, y))
+        tx = torch.min(self.lim_x, torch.max(-self.lim_x, x/z_cam))
+        ty = torch.min(self.lim_y, torch.max(-self.lim_y, y/z_cam))
         # return ty
 
         J00 = z_cam*self.fx 
@@ -243,17 +244,28 @@ class AlphaModel(torch.nn.Module):
         cov2D11 = cov2D11
         
         cov2D = torch.stack([cov2D00[:,:], cov2D0110[:,:], cov2D0110[:,:], cov2D11[:,:]], dim=2).reshape((-1,2,2))
+        # return cov2D
         conic = self.inv_op(cov2D)
         conic00 = conic[:,0,0]
+        # return conic00
         conic0110 = conic[:,0,1]
         conic11 = conic[:,1,1]
+        # return conic
    
         dx = z0*z0*self.tile_coord-z0*means2D
-        inside = -0.5 * (
+        # return z0
+        # t1 = torch.square(dx[:,:,0]) * conic00[:, None]
+        # t2 = torch.square(dx[:,:,1]) * conic11[:, None]
+        # t3 = dx[:,:,0]*dx[:,:,1] * conic0110[:, None]
+        # t4 = dx[:,:,0]*dx[:,:,1] * conic0110[:, None]
+        # return t1
+        # return dx
+        inside = (
             torch.square(dx[:,:,0]) * conic00[:, None] 
             + torch.square(dx[:,:,1]) * conic11[:, None]
             + dx[:,:,0]*dx[:,:,1] * conic0110[:, None]
             + dx[:,:,0]*dx[:,:,1] * conic0110[:, None])
+        return inside
         gauss_weight_orig = torch.exp(inside)
         alpha = gauss_weight_orig*opacities_rast
         return alpha
@@ -288,17 +300,17 @@ class DepthModel(torch.nn.Module):
         gamma = x[:,0:1]
         beta = x[:,1:2]
         alpha = x[:,2:3]
-        R00 = torch.cos(beta)*torch.cos(gamma)
-        R01 = torch.sin(alpha)*torch.sin(beta)*torch.cos(gamma)-torch.cos(alpha)*torch.sin(gamma)
+        R00 = torch.cos(alpha)*torch.cos(beta)
+        R01 = torch.cos(alpha)*torch.sin(beta)*torch.sin(gamma)-torch.sin(alpha)*torch.cos(gamma)
         R02 = torch.cos(alpha)*torch.sin(beta)*torch.cos(gamma)+torch.sin(alpha)*torch.sin(gamma)
         R03 = x[:,3:4]
-        R10 = torch.cos(beta)*torch.sin(gamma)
+        R10 = torch.sin(alpha)*torch.cos(beta)
         R11 = torch.sin(alpha)*torch.sin(beta)*torch.sin(gamma)+torch.cos(alpha)*torch.cos(gamma)
-        R12 = torch.cos(alpha)*torch.sin(beta)*torch.sin(gamma)-torch.sin(alpha)*torch.cos(gamma)
+        R12 = torch.sin(alpha)*torch.sin(beta)*torch.cos(gamma)-torch.cos(alpha)*torch.sin(gamma)
         R13 = x[:,4:5]
         R20 = -torch.sin(beta)
-        R21 = torch.sin(alpha)*torch.cos(beta)
-        R22 = torch.cos(alpha)*torch.cos(beta)
+        R21 = torch.cos(beta)*torch.sin(gamma)
+        R22 = torch.cos(beta)*torch.cos(gamma)
         R23 = x[:,5:6]
         combined = torch.cat([R00, R01, R02, R03, R10, R11, R12, R13, R20, R21, R22, R23], dim=1)
         result = combined.view(-1, 3, 4)
@@ -396,6 +408,42 @@ class MeanModel(torch.nn.Module):
         M = R_gaussians@scales_matrix
         self.cov_world = M @ M.transpose(1, 2)  # [N, 3, 3]
         # self.cov_world = self.cov_world.unsqueeze(0)  # Don't need an extra dimension that brings confusions
+        self.tan_fovx = 0.5*self.width/self.fx 
+        self.tan_fovy = 0.5*self.height/self.fy 
+        self.lim_x = torch.Tensor([1.3*self.tan_fovx]).to(self.device) 
+        self.lim_y = torch.Tensor([1.3*self.tan_fovy]).to(self.device)
+        
+    def get_depth(self, x):
+        gamma = x[:,0:1]
+        beta = x[:,1:2]
+        alpha = x[:,2:3]
+        R00 = torch.cos(alpha)*torch.cos(beta)
+        R01 = torch.cos(alpha)*torch.sin(beta)*torch.sin(gamma)-torch.sin(alpha)*torch.cos(gamma)
+        R02 = torch.cos(alpha)*torch.sin(beta)*torch.cos(gamma)+torch.sin(alpha)*torch.sin(gamma)
+        R03 = x[:,3:4]
+        R10 = torch.sin(alpha)*torch.cos(beta)
+        R11 = torch.sin(alpha)*torch.sin(beta)*torch.sin(gamma)+torch.cos(alpha)*torch.cos(gamma)
+        R12 = torch.sin(alpha)*torch.sin(beta)*torch.cos(gamma)-torch.cos(alpha)*torch.sin(gamma)
+        R13 = x[:,4:5]
+        R20 = -torch.sin(beta)
+        R21 = torch.cos(beta)*torch.sin(gamma)
+        R22 = torch.cos(beta)*torch.cos(gamma)
+        R23 = x[:,5:6]
+        combined = torch.cat([R00, R01, R02, R03, R10, R11, R12, R13, R20, R21, R22, R23], dim=1)
+        result = combined.view(-1, 3, 4)
+        # 3) Prepare the fixed 4th row [0, 0, 0, 1] as shape [N, 1, 4]
+        #    We'll broadcast (expand) this row for each of the N samples.
+        fixed_row = torch.tensor([0, 0, 0, 1]).view(1, 1, 4).to(self.device)
+        fixed_row = fixed_row.expand(result.shape[0], 1, 4)  # shape: [N, 1, 4]
+
+        # 4) Concatenate the top 3 rows and the fixed 4th row => [N, 4, 4]
+        x = torch.cat([result, fixed_row], dim=1)  # shape: [N, 4, 4]
+
+        means_cam_hom = torch.matmul(x, self.means_hom_tmp).transpose(1,2)    # [N, 4]
+        # means_cam = means_cam_hom[:,:,:3]
+        means_cam = means_cam_hom[:, :, :3]
+
+        return means_cam[:,:,2]
 
     def get_radii(self, x):
         gamma = x[:,0:1]
@@ -425,7 +473,7 @@ class MeanModel(torch.nn.Module):
 
         means_cam_hom = torch.matmul(x, self.means_hom_tmp).transpose(1,2)    # [N, 4]
         # means_cam = means_cam_hom[:,:,:3]
-        means_cam = means_cam_hom[:, :, :3] / means_cam_hom[:, :, 3:4]  # [N, 3]
+        means_cam = means_cam_hom[:, :, :3]  # [N, 3]
 
         # Step 5: Project means onto the image plane
         means_proj_hom = means_cam @ self.K.t()
@@ -445,6 +493,8 @@ class MeanModel(torch.nn.Module):
 
         # tx = torch.min(z_cam*self.lim_x, torch.max(-z_cam*self.lim_x, x))
         # ty = torch.min(z_cam*self.lim_y, torch.max(-z_cam*self.lim_y, y))
+        tx = z_cam*torch.min(self.lim_x, torch.max(-self.lim_x, x/z_cam))
+        ty = z_cam*torch.min(self.lim_y, torch.max(-self.lim_y, y/z_cam))
         # return ty
 
         # J00 = z_cam*self.fx 
@@ -452,9 +502,9 @@ class MeanModel(torch.nn.Module):
         # J11 = z_cam*self.fy 
         # J12 = -self.fy * y 
         J00 = self.fx / z_cam
-        J02 = -self.fx * x / z_cam**2
+        J02 = -self.fx * tx / z_cam**2
         J11 = self.fy / z_cam
-        J12 = -self.fy * y / z_cam**2
+        J12 = -self.fy * ty / z_cam**2
         # return J12
 
         cov2D00 = (
@@ -528,12 +578,13 @@ class MeanModel(torch.nn.Module):
         means_cam_hom = torch.matmul(x, self.means_hom_tmp).transpose(1,2)    # [N, 4]
         # means_cam = means_cam_hom[:,:,:3]
         means_cam = means_cam_hom[:, :, :3] 
+        # return means_cam
 
         # Step 5: Project means onto the image plane
         means_proj_hom = means_cam @ self.K.t()
+        return means_proj_hom
         # z0 = means_proj_hom[:,:,2:3]
         # means2D = means_proj_hom[:, :, :2]
-        return means_proj_hom
     
         R_cam = x[:, :3, :3]  # [1, 3, 3]
         R_cam = R_cam.unsqueeze(1)  # Add an extra dimension for broadcasting

@@ -352,20 +352,20 @@ if __name__ == "__main__":
     model_depth = DepthModel(model_alpha)
     print("###### Model Depth")
 
-    res_alpha = model_alpha(camera_pose)
-    print("###### Alpha")
-    res_depth = model_depth(camera_pose)
-    print("###### Depth")
-    depth_order = torch.argsort(res_depth, dim=1).squeeze()
-    sorted_alpha = res_alpha[0,:,depth_order,:]
-    sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
-    sorted_color = colors[depth_order,:]
-    rgb_color = (sorted_T * sorted_alpha * sorted_color[None]).sum(dim=1)
-    rgb_color = rgb_color.reshape(w, h, -1)[:,:,:3]
-    rgb_color = rgb_color.detach().cpu().numpy()
-    plt.figure(0)
-    plt.imshow(rgb_color)
-    plt.show()
+    # res_alpha = model_alpha(camera_pose)
+    # print("###### Alpha")
+    # res_depth = model_depth(camera_pose)
+    # print("###### Depth")
+    # depth_order = torch.argsort(res_depth, dim=1).squeeze()
+    # sorted_alpha = res_alpha[0,:,depth_order,:]
+    # sorted_T = torch.cat([torch.ones_like(sorted_alpha[:,:1]), 1-sorted_alpha[:,:-1]], dim=1).cumprod(dim=1)
+    # sorted_color = colors[depth_order,:]
+    # rgb_color = (sorted_T * sorted_alpha * sorted_color[None]).sum(dim=1)
+    # rgb_color = rgb_color.reshape(w, h, -1)[:,:,:3]
+    # rgb_color = rgb_color.detach().cpu().numpy()
+    # plt.figure(0)
+    # plt.imshow(rgb_color)
+    # plt.show()
 
     ##################### Compute Bounds #####################
     my_input = torch.clone(camera_pose)
@@ -383,8 +383,8 @@ if __name__ == "__main__":
     # ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     ptb_alpha = PerturbationLpNorm(
         norm=np.inf, 
-        x_L=torch.Tensor([[-0.0,-0.0,-0.0,-1e-5,-1e-5,-1e-5]]).to(model_alpha.device),
-        x_U=torch.Tensor([[0.0,0.0,0.0,1e-5,1e-5,1e-5]]).to(model_alpha.device),
+        x_L=torch.Tensor([[-0.0,-0.0,-0.0,-1.0,-1.0,-1.0]]).to(model_alpha.device),
+        x_U=torch.Tensor([[0.0,0.0,0.0,1.0,1.0,1.0]]).to(model_alpha.device),
     )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb_alpha)
@@ -394,7 +394,7 @@ if __name__ == "__main__":
     required_A = defaultdict(set)
     required_A[model_alpha_bounded.output_name[0]].add(model_alpha_bounded.input_name[0])
     # lb_alpha, ub_alpha, A_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='crown', return_A=True, needed_A_dict=required_A)
-    lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='crown')
+    lb_alpha, ub_alpha = model_alpha_bounded.compute_bounds(x=(my_input, ), method='alpha-crown')
     lb_alpha = torch.clip(lb_alpha, min=0)
     ub_alpha = torch.clip(ub_alpha, max=0.99)
     bounds_alpha = torch.cat((lb_alpha, ub_alpha), dim=0)
@@ -407,8 +407,8 @@ if __name__ == "__main__":
     # ptb = PerturbationLpNorm(norm=np.inf, eps=eps)
     ptb_depth = PerturbationLpNorm(
         norm=np.inf, 
-        x_L=torch.Tensor([[-0.0,-0.0,-0.0,-1.0,-1.0,-1.0]]).to(model_depth.device),
-        x_U=torch.Tensor([[0.0,0.0,0.0,1.0,1.0,1.0]]).to(model_depth.device),
+        x_L=torch.Tensor([[-0.05,-0.05,-0.05,-1.0,-1.0,-1.0]]).to(model_depth.device),
+        x_U=torch.Tensor([[0.05,0.05,0.05,1.0,1.0,1.0]]).to(model_depth.device),
     )
     print(">>>>>> Starting BoundedTensor")
     my_input = BoundedTensor(my_input, ptb_depth)
@@ -492,14 +492,14 @@ if __name__ == "__main__":
     diff_compemp_ub = (ub_alpha-empirical_alpha_ub).reshape(w,h,-1)
     diff_compemp_lb = (empirical_alpha_lb-lb_alpha).reshape(w,h,-1)
 
-    tile_color_ub[:,:,1:] = 0
+    # tile_color_ub[:,:,1:] = 0
 
     plt.figure(1)
     plt.imshow(tile_color_lb)
     plt.title("computed lb alpha-crown")
     plt.figure(2)
     plt.imshow(tile_color_ub)
-    plt.title("computed ub alpha-crown handle 0")
+    plt.title("computed ub alpha-crown")
     plt.figure(3)
     plt.imshow(empirical_lb)
     plt.title("empirical lb")

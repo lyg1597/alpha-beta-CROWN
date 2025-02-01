@@ -36,6 +36,7 @@ class AlphaModel(torch.nn.Module):
         width=2560,
         height=1440,
         tile_coord = None,
+        method = 'crown',
     ):
         super().__init__()  # Initialize the base class first
 
@@ -249,11 +250,13 @@ class AlphaModel(torch.nn.Module):
         conic11 = conic[:,1,1]
    
         dx = z0*z0*self.tile_coord-z0*means2D
-        inside = -0.5 * (
+        inside = (
             torch.square(dx[:,:,0]) * conic00[:, None] 
             + torch.square(dx[:,:,1]) * conic11[:, None]
             + dx[:,:,0]*dx[:,:,1] * conic0110[:, None]
             + dx[:,:,0]*dx[:,:,1] * conic0110[:, None])
+        # inside = -0.5 * 
+        return inside
         gauss_weight_orig = torch.exp(inside)
         alpha = gauss_weight_orig*opacities_rast
         return alpha
@@ -534,83 +537,4 @@ class MeanModel(torch.nn.Module):
         # z0 = means_proj_hom[:,:,2:3]
         # means2D = means_proj_hom[:, :, :2]
         return means_proj_hom
-    
-        R_cam = x[:, :3, :3]  # [1, 3, 3]
-        R_cam = R_cam.unsqueeze(1)  # Add an extra dimension for broadcasting
-        # First multiplication: R_cam @ self.cov_world
-        cov_temp = torch.matmul(R_cam, self.cov_world)  # Shape: [1, N, 3, 3]
-        # Second multiplication: result @ R_cam.transpose(-1, -2)
-        cov_cam = torch.matmul(cov_temp, R_cam.transpose(-1, -2))  # Shape: [1, N, 3, 3]
-        
-        # # Step 6: Compute 2D covariance matrices using the Jacobian
-        x = means_cam[:, :, 0]
-        y = means_cam[:, :, 1]
-        z_cam = means_cam[:, :, 2]
-
-        # tx = torch.min(z_cam*self.lim_x, torch.max(-z_cam*self.lim_x, x))
-        # ty = torch.min(z_cam*self.lim_y, torch.max(-z_cam*self.lim_y, y))
-        # return ty
-
-        J00 = z_cam*self.fx 
-        J02 = -self.fx * x 
-        J11 = z_cam*self.fy 
-        J12 = -self.fy * y 
-        # J00 = self.fx / z_cam
-        # J02 = -self.fx * tx / z_cam**2
-        # J11 = self.fy / z_cam
-        # J12 = -self.fy * ty / z_cam**2
-        # return J12
-
-        cov2D00 = (
-            J00 * J00 * cov_cam[:,:,0, 0] +
-            J00 * J02 * cov_cam[:,:,0, 2] +
-            J02 * J00 * cov_cam[:,:,2, 0] +
-            J02 * J02 * cov_cam[:,:,2, 2]
-        )
-        
-        # Compute C[1][1]
-        cov2D11 = (
-            J11 * J11 * cov_cam[:,:,1, 1] +
-            J11 * J12 * cov_cam[:,:,1, 2] +
-            J12 * J11 * cov_cam[:,:,2, 1] +
-            J12 * J12 * cov_cam[:,:,2, 2]
-        )
-        
-        # Compute C[0][1]
-        cov2D0110 = (
-            J00 * J11 * cov_cam[:,:,0, 1] +
-            J00 * J12 * cov_cam[:,:,0, 2] +
-            J02 * J11 * cov_cam[:,:,2, 1] +
-            J02 * J12 * cov_cam[:,:,2, 2]
-        )
-    
-        # # Compute C[1][0]
-        # cov2D10 = (
-        #     J11 * J00 * cov_cam[:,:,1, 0] +
-        #     J11 * J02 * cov_cam[:,:,1, 2] +
-        #     J12 * J00 * cov_cam[:,:,2, 0] +
-        #     J12 * J02 * cov_cam[:,:,2, 2]
-        # )
-        cov2D00 = cov2D00+0.003 
-        cov2D11 = cov2D11+0.003
-        
-        cov2D = torch.stack([cov2D00[:,:], cov2D0110[:,:], cov2D0110[:,:], cov2D11[:,:]], dim=2).reshape((1,-1,2,2))
-        conic = self.inv_op(cov2D)
-        conic00 = conic[:,:,0,0]
-        conic0110 = conic[:,:,0,1]
-        conic11 = conic[:,:,1,1]
-   
-        dx = z0[:,None]*z0[:,None]*self.tile_coord-z0[:,None]*means2D[:,None,:]
-        inside = -0.5 * (
-            torch.square(dx[:,:,:,0]) * conic00[:, None, :] 
-            + torch.square(dx[:,:,:,1]) * conic11[:, None, :]
-            + dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :]
-            + dx[:,:,:,0]*dx[:,:,:,1] * conic0110[:, None, :])
-        gauss_weight_orig = torch.exp(inside)
-        alpha = gauss_weight_orig[:,:,:,None]*self.opacities_rast
-        return alpha
-
-        # alpha_clip = torch.clip(alpha, max=0.99)
-        alpha_clip = -torch.nn.functional.relu(-alpha+0.99)+0.99
-
-        return alpha_clip
+            
