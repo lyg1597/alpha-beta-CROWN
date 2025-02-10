@@ -395,12 +395,12 @@ if __name__ == "__main__":
     colors = colors[~mask]
 
     # Tree2
-    mask = (means[:,0]>=0.6) & (means[:,0]<=0.64) & (means[:,1]>=-0.1) & (means[:,1]<=-0.061) & (means[:,2]>=-0.158) & (means[:,2]<=-0.055)
-    means = means[~mask]
-    quats = quats[~mask]
-    opacities = opacities[~mask]
-    scales = scales[~mask]
-    colors = colors[~mask]
+    # mask = (means[:,0]>=0.6) & (means[:,0]<=0.64) & (means[:,1]>=-0.1) & (means[:,1]<=-0.061) & (means[:,2]>=-0.158) & (means[:,2]<=-0.055)
+    # means = means[~mask]
+    # quats = quats[~mask]
+    # opacities = opacities[~mask]
+    # scales = scales[~mask]
+    # colors = colors[~mask]
 
     import pyvista as pv 
     means = means.detach().cpu().numpy()

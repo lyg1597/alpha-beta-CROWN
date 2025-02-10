@@ -462,25 +462,25 @@ if __name__ == "__main__":
     for i in range(10):
         eps_lb = i*0.1*scale
         eps_ub = (i+1)*0.1*scale
-        # with torch.no_grad():
-        #     res = rasterize_gaussians_pytorch_rgb(
-        #         means, 
-        #         quats/ quats.norm(dim=-1, keepdim=True),
-        #         torch.exp(scales),
-        #         torch.sigmoid(opacities).squeeze(-1),
-        #         colors,
-        #         view_mats, 
-        #         Ks,
-        #         width,
-        #         height
-        #     )
-        # res_rgb = res['render']
-        # print(res_rgb.shape)
-        # res_rgb = res_rgb[:,...,:3]
-        # res_rgb = res_rgb.detach().cpu().numpy()
-        # plt.figure(0)
-        # plt.imshow(res_rgb)
-        # plt.show()
+        with torch.no_grad():
+            res = rasterize_gaussians_pytorch_rgb(
+                means, 
+                quats/ quats.norm(dim=-1, keepdim=True),
+                torch.exp(scales),
+                torch.sigmoid(opacities).squeeze(-1),
+                colors,
+                view_mats, 
+                Ks,
+                width,
+                height
+            )
+        res_rgb = res['render']
+        print(res_rgb.shape)
+        res_rgb = res_rgb[:,...,:3]
+        res_rgb = res_rgb.detach().cpu().numpy()
+        plt.figure(0)
+        plt.imshow(res_rgb)
+        plt.show()
 
         # Get all the pix_coord 
         pix_coord = torch.stack(torch.meshgrid(torch.arange(width), torch.arange(height), indexing='xy'), dim=-1).to(means.device)
