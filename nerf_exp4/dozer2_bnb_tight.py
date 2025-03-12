@@ -522,7 +522,7 @@ if __name__ == "__main__":
 
     res_lb = np.zeros((height, width, 3))+1e10
     res_ub = np.zeros((height, width, 3))-1e10
-    num_part = 500
+    num_part = 1000
     images_lb = np.zeros((num_part, height, width, 3))
     images_ub = np.zeros((num_part, height, width, 3))
     camera_poses = np.zeros((num_part, 6, 2))
@@ -538,6 +538,8 @@ if __name__ == "__main__":
             0, 0+(x_part+0.5)*np.pi/num_part, 0,
             3.7*np.sin(np.pi/(2*num_part)), 0, 0
         ]]).to(means.device)
+        print(eps_lb)
+        print(eps_ub)
         
         # camera_to_worlds = torch.Tensor(camera_pose)[None].to(means.device)
         camera_to_world = torch.Tensor(camera_pose_transformed)[None].to(means.device)
@@ -680,7 +682,7 @@ if __name__ == "__main__":
         camera_poses[x_part,:,0] = (cam_inp+eps_lb)[0].detach().cpu().numpy()
         camera_poses[x_part,:,1] = (cam_inp+eps_ub)[0].detach().cpu().numpy()
 
-        np.savez('./dozer2_pi_1000_tight.npz', images_lb=images_lb,images_ub=images_ub,images_noptb=camera_poses)
+        np.savez(f'./dozer2_pi_{num_part}_tight.npz', images_lb=images_lb,images_ub=images_ub,images_noptb=camera_poses)
 
 
         res_lb = np.minimum(res_lb, render_color_lb)

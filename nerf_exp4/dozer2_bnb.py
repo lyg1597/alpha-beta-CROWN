@@ -449,7 +449,7 @@ if __name__ == "__main__":
 
     res_lb = np.zeros((height, width, 3))+1e10
     res_ub = np.zeros((height, width, 3))-1e10
-    num_part = 500
+    num_part = 1000
     images_lb = np.zeros((num_part, height, width, 3))
     images_ub = np.zeros((num_part, height, width, 3))
     camera_poses = np.zeros((num_part, 6, 2))
@@ -601,7 +601,7 @@ if __name__ == "__main__":
         camera_poses[x_part,:,0] = (cam_inp+eps_lb)[0].detach().cpu().numpy()
         camera_poses[x_part,:,1] = (cam_inp+eps_ub)[0].detach().cpu().numpy()
 
-        np.savez('./dozer2_pi_1000.npz', images_lb=images_lb,images_ub=images_ub,images_noptb=camera_poses)
+        np.savez(f'./dozer2_pi_{num_part}.npz', images_lb=images_lb,images_ub=images_ub,images_noptb=camera_poses)
 
 
         res_lb = np.minimum(res_lb, render_color_lb)
