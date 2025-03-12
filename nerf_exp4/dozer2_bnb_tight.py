@@ -2,9 +2,9 @@ from auto_LiRPA import BoundedModule, BoundedTensor, PerturbationLpNorm
 import torch 
 import os 
 import numpy as np 
-import matplotlib.pyplot as plt 
-from simple_model2_alphatest5_1 import AlphaModel, DepthModel, MeanModel
-from rasterization_pytorch import rasterize_gaussians_pytorch_rgb
+# import matplotlib.pyplot as plt 
+from simple_model2_alphatest5 import AlphaModel, DepthModel, MeanModel
+# from rasterization_pytorch import rasterize_gaussians_pytorch_rgb
 from scipy.spatial.transform import Rotation 
 from collections import defaultdict
 import cv2
@@ -530,8 +530,14 @@ if __name__ == "__main__":
         print(f"%%%%%%%%%%%%%%%% partition {x_part}")
         # eps_lb= torch.Tensor([[0,0,0,-0.0025+x_part*0.0001,0,0]]).to(means.device)
         # eps_ub = torch.Tensor([[0,0,0,-0.00025+x_part*0.0001+0.0001,0,0]]).to(means.device)
-        eps_lb = torch.Tensor([[0,0+x_part*np.pi/num_part,0,0,0,0]]).to(means.device)
-        eps_ub = torch.Tensor([[0,0+(x_part+1)*np.pi/num_part,0,0,0,0]]).to(means.device)
+        eps_lb = torch.Tensor([[
+            0, 0+(x_part+0.5)*np.pi/num_part, 0,
+            -3.7*np.sin(np.pi/(2*num_part)), 0, -3.7*(1-np.cos(np.pi/(2*num_part)))
+        ]]).to(means.device)
+        eps_ub = torch.Tensor([[
+            0, 0+(x_part+0.5)*np.pi/num_part, 0,
+            3.7*np.sin(np.pi/(2*num_part)), 0, 0
+        ]]).to(means.device)
         
         # camera_to_worlds = torch.Tensor(camera_pose)[None].to(means.device)
         camera_to_world = torch.Tensor(camera_pose_transformed)[None].to(means.device)
@@ -674,7 +680,7 @@ if __name__ == "__main__":
         camera_poses[x_part,:,0] = (cam_inp+eps_lb)[0].detach().cpu().numpy()
         camera_poses[x_part,:,1] = (cam_inp+eps_ub)[0].detach().cpu().numpy()
 
-        np.savez('./dozer2_pi_1000.npz', images_lb=images_lb,images_ub=images_ub,images_noptb=camera_poses)
+        np.savez('./dozer2_pi_1000_tight.npz', images_lb=images_lb,images_ub=images_ub,images_noptb=camera_poses)
 
 
         res_lb = np.minimum(res_lb, render_color_lb)

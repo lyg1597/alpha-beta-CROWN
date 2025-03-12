@@ -3,6 +3,7 @@ import os
 import numpy as np 
 import json 
 from scipy.spatial.transform import Rotation
+import os 
 
 dt = {
     "transform": [
@@ -27,6 +28,23 @@ dt = {
     ],
     "scale": 1.0
 }
+
+def get_viewmat(optimized_camera_to_world):
+    """
+    function that converts c2w to gsplat world2camera matrix, using compile for some speed
+    """
+    R = optimized_camera_to_world[:, :3, :3]  # 3 x 3
+    T = optimized_camera_to_world[:, :3, 3:4]  # 3 x 1
+    # flip the z and y axes to align with gsplat conventions
+    R = R * torch.tensor([[[1, -1, -1]]], device=R.device, dtype=R.dtype)
+    # analytic matrix inverse to get world2camera matrix
+    R_inv = R.transpose(1, 2)
+    T_inv = -torch.bmm(R_inv, T)
+    viewmat = torch.zeros(R.shape[0], 4, 4, device=R.device, dtype=R.dtype)
+    viewmat[:, 3, 3] = 1.0  # homogenous
+    viewmat[:, :3, :3] = R_inv
+    viewmat[:, :3, 3:4] = T_inv
+    return viewmat
 
 if __name__ == "__main__":
     transform = np.array(dt['transform'])
@@ -159,7 +177,7 @@ end_header\n\
     # Overlay the edges using a wireframe style for clear visualization
     plotter.add_mesh(cuboid, color='black', style='wireframe', line_width=2)
 
-    with open('../../nerfstudio/data/dozer2/transforms.json', 'r') as f:
+    with open(os.path.join(script_dir, '../../nerfstudio/data/dozer2/transforms.json'), 'r') as f:
         data_transform = json.load(f)
 
     default_forward = np.array([0, 0, -1])
@@ -185,10 +203,17 @@ end_header\n\
         arrow = pv.Arrow(start=position, direction=forward_world, tip_length=0.2, tip_radius=0.05, shaft_radius=0.02)
         plotter.add_mesh(arrow, color='magenta')
 
+    # mat = np.array([
+    #     [1,0,0,0],
+    #     [0, 0.2,-0.97979589711 ,-3.7],
+    #     [0, 0.97979589711 , 0.2, 0.8],
+    #     [0,0,0,1]
+    # ])
+
     mat = np.array([
         [1,0,0,0],
-        [0, 0.2,-0.97979589711 ,-3.7],
-        [0, 0.97979589711 , 0.2, 0.8],
+        [0, 0,-1 ,-3.7],
+        [0, 1 , 0, 0.8],
         [0,0,0,1]
     ])
 
@@ -203,6 +228,20 @@ end_header\n\
         new_mat = np.zeros((4,4))
         new_mat[:3,:3] = new_ori_mat 
         new_mat[:3,3] = new_pos 
+
+        new_mat_tensor = torch.Tensor(new_mat)[None,:3,:]
+        view_mats = get_viewmat(new_mat_tensor)
+        camera_pos = view_mats[0,:3,3].detach().cpu().numpy()
+        camera_ori = Rotation.from_matrix(view_mats[0,:3,:3].detach().cpu().numpy()).as_euler('xyz')
+        cam_inp = [
+            camera_ori[0], 
+            camera_ori[1], 
+            camera_ori[2], 
+            camera_pos[0], 
+            camera_pos[1], 
+            camera_pos[2]
+        ]
+        print(cam_inp)
         new_mat[3,3] = 1
 
         position = new_pos 
