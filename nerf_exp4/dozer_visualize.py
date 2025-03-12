@@ -34,7 +34,7 @@ if __name__ == "__main__":
     scale = dt['scale']
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    output_folder = os.path.join(script_dir, '../../nerfstudio/outputs/dozer2/splatfacto/2025-03-11_154931')
+    output_folder = os.path.join(script_dir, '../../nerfstudio/outputs/dozer2/splatfacto/2025-03-11_161130')
     checkpoint = "step-000029999.ckpt"
     
     checkpoint_fn = os.path.join(output_folder, 'nerfstudio_models', checkpoint)

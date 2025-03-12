@@ -3,7 +3,7 @@ import torch
 import os 
 import numpy as np 
 import matplotlib.pyplot as plt 
-from simple_model2_alphatest5 import AlphaModel, DepthModel, MeanModel
+from simple_model2_alphatest5_1 import AlphaModel, DepthModel, MeanModel
 from rasterization_pytorch import rasterize_gaussians_pytorch_rgb
 from scipy.spatial.transform import Rotation 
 from collections import defaultdict
@@ -106,66 +106,122 @@ def get_viewmat(optimized_camera_to_world):
     viewmat[:, :3, 3:4] = T_inv
     return viewmat
 
-def computeT_new_new(
+# Assume there's no uncertainty in the depth ordering. 
+def computeT_new_new_new(
     ptb_depth: PerturbationLpNorm,
+    depth_lb: torch.Tensor, 
+    depth_ub: torch.Tensor,
     lA_depth: torch.Tensor,
     uA_depth: torch.Tensor,
     lbias_depth: torch.Tensor,
     ubias_depth: torch.Tensor,
     alpha_lb: torch.Tensor,
     alpha_ub: torch.Tensor,
+    colors: torch.Tensor,
 ):
     batch_size = 100
     N = lA_depth.shape[1]
-    x_L = ptb_depth.x_L[0:1]
-    x_U = ptb_depth.x_U[0:1]
+    x_L: torch.Tensor = ptb_depth.x_L[0:1]
+    x_U: torch.Tensor = ptb_depth.x_U[0:1]
     A_lb = alpha_lb.squeeze(0).squeeze(-1)
     A_ub = alpha_ub.squeeze(0).squeeze(-1)
     device = A_lb.device
     P = A_lb.shape[0]
-    result_lb = torch.ones((P,N), device = device)                      # P*N
-    result_ub = torch.ones((P,N), device = device)                      # P*N
-    for i in range(0,N,batch_size):  
-        # Get for each gaussian i for all gaussians, what step(d_i-d_j) should be 
-        lA_diff = lA_depth[:,:,None]-uA_depth[:,None,i:i+batch_size]             # 1*N*BS*6
-        uA_diff = uA_depth[:,:,None]-lA_depth[:,None,i:i+batch_size]             # 1*N*BS*6
-        lbias_diff = lbias_depth[:,:,None]-ubias_depth[:,None,i:i+batch_size]    # 1*N*BS
-        ubias_diff = ubias_depth[:,:,None]-lbias_depth[:,None,i:i+batch_size]    # 1*N*BS
 
-        diffL_part, _ = linear_bounds(lA_diff, lbias_diff, x_L, x_U)    # 1*N*BS
-        _, diffU_part = linear_bounds(uA_diff, ubias_diff, x_L, x_U)    # 1*N*BS
+    res_step_sum_l = torch.zeros((1,N), device = device)    # 1*N
+    res_step_sum_u = torch.zeros((1,N), device = device)    # 1*N
+    for i in range(0, N, batch_size):
+        diffL_part = depth_ub[None, i:i+batch_size]-depth_ub[None,None,:,0]
+        diffU_part = depth_ub[None, i:i+batch_size]-depth_ub[None,None,:,0]
 
-        diffL = torch.minimum(diffL_part, diffU_part)                   # 1*N*BS
-        diffU = torch.maximum(diffL_part, diffU_part)                   # 1*N*BS
+        diffL = torch.minimum(diffL_part, diffU_part)       # 1*N*BS
+        diffU = torch.maximum(diffL_part, diffU_part)       # 1*N*BS
 
-        # Set diagonal element to 0
-        # diffL[:,i,:] = 0
-        # diffU[:,i,:] = 0
-        actual_bs = min(batch_size, N - i)
-        
-        # Create indices for diagonal masking [BATCH VERSION]
+
+        actual_bs = min(batch_size, N-i)
+
         batch_indices = torch.arange(i, i + actual_bs, device=device)  # k values: i, i+1, ..., i+bs-1
         offset_indices = torch.arange(0, actual_bs, device=device)     # Positions within current batch
         
         # Vectorized diagonal masking
-        diffL[:, batch_indices, offset_indices] = 0  # j=k masking
-        diffU[:, batch_indices, offset_indices] = 0
+        diffL[:, offset_indices, batch_indices] = 0  # j=k masking
+        diffU[:, offset_indices, batch_indices] = 0
 
-        # assert torch.all(diffL<=diffU)
-
-        step_L = torch.zeros(diffL.shape).to(A_ub.device)               # 1*N*BS
+        # Compute step function for each batch 
+        step_L = torch.zeros(diffL.shape).to(A_ub.device)               # 1*BS*N
         mask_L = diffL>0
         step_L[mask_L] = 1.0
-        step_U = torch.ones(diffU.shape).to(A_ub.device)                # 1*N*BS
+        step_U = torch.ones(diffU.shape).to(A_ub.device)                # 1*BS*N
         mask_U = diffU<=0
         step_U[mask_U] = 0.0
 
-        term_lb = 1-step_U*A_ub[:,None, i:i+batch_size]                         # P*N
-        term_ub = 1-step_L*A_lb[:,None, i:i+batch_size]                         # P*N
+        res_step_sum_l[:,i:i+batch_size] = step_L.sum(dim=2)
+        res_step_sum_u[:,i:i+batch_size] = step_U.sum(dim=2)
 
-        result_lb = result_lb*term_lb.prod(dim=2)
-        result_ub = result_ub*term_ub.prod(dim=2)
-    return result_lb.unsqueeze(0).unsqueeze(-1), result_ub.unsqueeze(0).unsqueeze(-1)
+    assert torch.all(res_step_sum_l == res_step_sum_u) 
+
+    # Compute upper bound 
+    order_ub = torch.argsort(res_step_sum_u).flip(dims=(1,))
+    color_ub_r = torch.zeros((P,1), device = alpha_ub.device)
+    color_ub_g = torch.zeros((P,1), device = alpha_ub.device)
+    color_ub_b = torch.zeros((P,1), device = alpha_ub.device)
+    for i in range(order_ub.shape[1]):
+        gauss_idx = order_ub[0,i]
+        # Color r upper bound 
+        pos_mask=(colors[gauss_idx,0]-color_ub_r[:,0])>=0
+        neg_mask=(colors[gauss_idx,0]-color_ub_r[:,0])<0
+        color_ub_r[:,0] = color_ub_r[:,0]*(1-torch.where(pos_mask,alpha_ub[0,:,gauss_idx,0],1))+\
+            color_ub_r[:,0]*(1-torch.where(neg_mask,alpha_lb[0,:,gauss_idx,0],1))+\
+            torch.where(pos_mask,alpha_ub[0,:,gauss_idx,0],0)*colors[gauss_idx,0]+\
+            torch.where(neg_mask,alpha_lb[0,:,gauss_idx,0],0)*colors[gauss_idx,0]
+        # Color g upper bound 
+        pos_mask=(colors[gauss_idx,1]-color_ub_g[:,0])>=0
+        neg_mask=(colors[gauss_idx,1]-color_ub_g[:,0])<0
+        color_ub_g[:,0] = color_ub_g[:,0]*(1-torch.where(pos_mask,alpha_ub[0,:,gauss_idx,0],1))+\
+            color_ub_g[:,0]*(1-torch.where(neg_mask,alpha_lb[0,:,gauss_idx,0],1))+\
+            torch.where(pos_mask,alpha_ub[0,:,gauss_idx,0],0)*colors[gauss_idx,1]+\
+            torch.where(neg_mask,alpha_lb[0,:,gauss_idx,0],0)*colors[gauss_idx,1]
+        # Color b upper bound 
+        pos_mask=(colors[gauss_idx,2]-color_ub_b[:,0])>=0
+        neg_mask=(colors[gauss_idx,2]-color_ub_b[:,0])<0
+        color_ub_b[:,0] = color_ub_b[:,0]*(1-torch.where(pos_mask,alpha_ub[0,:,gauss_idx,0],1))+\
+            color_ub_b[:,0]*(1-torch.where(neg_mask,alpha_lb[0,:,gauss_idx,0],1))+\
+            torch.where(pos_mask,alpha_ub[0,:,gauss_idx,0],0)*colors[gauss_idx,2]+\
+            torch.where(neg_mask,alpha_lb[0,:,gauss_idx,0],0)*colors[gauss_idx,2]
+
+    # Compute lower bound 
+    order_lb = torch.argsort(res_step_sum_u).flip(dims=(1,))
+    color_lb_r = torch.zeros((P,1), device = alpha_lb.device)
+    color_lb_g = torch.zeros((P,1), device = alpha_lb.device)
+    color_lb_b = torch.zeros((P,1), device = alpha_lb.device)
+    for i in range(order_ub.shape[1]):
+        gauss_idx = order_lb[0,i]
+        # Color r lower bound 
+        pos_mask=(colors[gauss_idx,0]-color_lb_r[:,0])>=0
+        neg_mask=(colors[gauss_idx,0]-color_lb_r[:,0])<0
+        color_lb_r[:,0] = color_lb_r[:,0]*(1-torch.where(pos_mask,alpha_lb[0,:,gauss_idx,0],1))+\
+            color_lb_r[:,0]*(1-torch.where(neg_mask,alpha_ub[0,:,gauss_idx,0],1))+\
+            torch.where(pos_mask,alpha_lb[0,:,gauss_idx,0],0)*colors[gauss_idx,0]+\
+            torch.where(neg_mask,alpha_ub[0,:,gauss_idx,0],0)*colors[gauss_idx,0]
+        # Color g lower bound 
+        pos_mask=(colors[gauss_idx,1]-color_lb_g[:,0])>=0
+        neg_mask=(colors[gauss_idx,1]-color_lb_g[:,0])<0
+        color_lb_g[:,0] = color_lb_g[:,0]*(1-torch.where(pos_mask,alpha_lb[0,:,gauss_idx,0],1))+\
+            color_lb_g[:,0]*(1-torch.where(neg_mask,alpha_ub[0,:,gauss_idx,0],1))+\
+            torch.where(pos_mask,alpha_lb[0,:,gauss_idx,0],0)*colors[gauss_idx,1]+\
+            torch.where(neg_mask,alpha_ub[0,:,gauss_idx,0],0)*colors[gauss_idx,1]
+        # Color b lower bound 
+        pos_mask=(colors[gauss_idx,2]-color_lb_b[:,0])>=0
+        neg_mask=(colors[gauss_idx,2]-color_lb_b[:,0])<0
+        color_lb_b[:,0] = color_lb_b[:,0]*(1-torch.where(pos_mask,alpha_lb[0,:,gauss_idx,0],1))+\
+            color_lb_b[:,0]*(1-torch.where(neg_mask,alpha_ub[0,:,gauss_idx,0],1))+\
+            torch.where(pos_mask,alpha_lb[0,:,gauss_idx,0],0)*colors[gauss_idx,2]+\
+            torch.where(neg_mask,alpha_ub[0,:,gauss_idx,0],0)*colors[gauss_idx,2]
+    
+    color_lb = torch.cat((color_lb_r, color_lb_g, color_lb_b), dim=1)
+    color_ub = torch.cat((color_ub_r, color_ub_g, color_ub_b), dim=1)
+
+    return color_lb, color_ub
 
 def get_rect_set(
     # Input perturbation 
@@ -262,14 +318,14 @@ def compute_tile_color(
 
     overall_alpha_lb = torch.zeros((1,(htr-hbl)*(wtr-wbl), 0, 1)).to(means_strip.device)
     overall_alpha_ub = torch.zeros((1,(htr-hbl)*(wtr-wbl), 0, 1)).to(means_strip.device)
-    # overall_depth_lb = torch.zeros(1,(htr-hbl)*(wtr-wbl)).to(means_strip.device)
-    # overall_depth_ub = torch.zeros(1,(htr-hbl)*(wtr-wbl)).to(means_strip.device)
 
     overall_depth_lA = torch.zeros((1,0,6)).to(means_strip.device)
     overall_depth_uA = torch.zeros((1,0,6)).to(means_strip.device)
     overall_depth_lbias = torch.zeros((1,0)).to(means_strip.device)
     overall_depth_ubias = torch.zeros((1,0)).to(means_strip.device)
-    
+    overall_depth_lb = torch.zeros((0,1)).to(means_strip.device)
+    overall_depth_ub = torch.zeros((0,1)).to(means_strip.device)
+
     for j in range(0, N, gauss_step):
         print(f">>>>>>>> Computation Progress {j}/{N}")
         data_pack = {
@@ -366,6 +422,8 @@ def compute_tile_color(
         overall_depth_uA = torch.cat((overall_depth_uA, depth_uA), dim=1)
         overall_depth_lbias = torch.cat((overall_depth_lbias, depth_lbias), dim=1)
         overall_depth_ubias = torch.cat((overall_depth_ubias, depth_ubias), dim=1)
+        overall_depth_lb = torch.cat((overall_depth_lb, lb_depth), dim=0)
+        overall_depth_ub = torch.cat((overall_depth_ub, ub_depth), dim=0)
 
     bounds_alpha = torch.cat((overall_alpha_lb, overall_alpha_ub), dim=0)
     nan_mask = torch.any(torch.isnan(bounds_alpha),dim=(0,1,3))
@@ -376,24 +434,39 @@ def compute_tile_color(
     overall_depth_uA = overall_depth_uA[:,mask,:]
     overall_depth_lbias = overall_depth_lbias[:,mask]
     overall_depth_ubias = overall_depth_ubias[:,mask]
+    overall_depth_lbias = overall_depth_lbias[:,mask]
+    overall_depth_ubias = overall_depth_ubias[:,mask]
     colors_strip = colors_strip[mask,:]
 
-    tmp_res_Tl, tmp_res_Tu = computeT_new_new(
+    # tmp_res_Tl, tmp_res_Tu = computeT_new_new(
+    #     ptb_depth,
+    #     overall_depth_lA,
+    #     overall_depth_uA,
+    #     overall_depth_lbias,
+    #     overall_depth_ubias,   
+    #     bounds_alpha[0:1],
+    #     bounds_alpha[1:2]
+    # )
+
+    tile_color_lb, tile_color_ub = computeT_new_new_new(
         ptb_depth,
+        overall_depth_lb,
+        overall_depth_ub,
         overall_depth_lA,
         overall_depth_uA,
         overall_depth_lbias,
         overall_depth_ubias,   
         bounds_alpha[0:1],
-        bounds_alpha[1:2]
+        bounds_alpha[1:2],
+        colors_strip,
     )
 
-    res_T = torch.cat((tmp_res_Tl, tmp_res_Tu), dim=0)
-    bounds_colors = torch.stack((colors_strip, colors_strip), dim=0)
-    bounds_colors = bounds_colors[:,None]
-    tile_color = (res_T*bounds_alpha*bounds_colors).sum(dim=2)
-    tile_color_lb = tile_color[0]
-    tile_color_ub = tile_color[1]
+    # res_T = torch.cat((tmp_res_Tl, tmp_res_Tu), dim=0)
+    # bounds_colors = torch.stack((colors_strip, colors_strip), dim=0)
+    # bounds_colors = bounds_colors[:,None]
+    # tile_color = (res_T*bounds_alpha*bounds_colors).sum(dim=2)
+    # tile_color_lb = tile_color[0]
+    # tile_color_ub = tile_color[1]
     tile_color_lb = tile_color_lb.reshape(htr-hbl, wtr-wbl, -1)[:,:,:3]
     tile_color_ub = tile_color_ub.reshape(htr-hbl, wtr-wbl, -1)[:,:,:3]
     tile_color_lb = tile_color_lb.detach().cpu().numpy()
