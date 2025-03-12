@@ -9,12 +9,22 @@ from scipy.spatial.transform import Rotation
 from collections import defaultdict
 import cv2
 
-method = 'crown'
+method = 'forward'
 adaptive_sampling = False 
 
 width=50
 height=50
 f = 70
+
+eps_lb = torch.Tensor([[0,-np.pi,0,0,-0.0,-0.0]]).to('cuda')
+eps_ub = torch.Tensor([[0, np.pi,0,0,0.0,0.0]]).to('cuda')
+tile_size_global = 16
+if method == 'ibp' or method=='crown' or method=='forward':
+    gauss_step = 2000
+elif method == 'alpha-crown':
+    gauss_step = 1500
+threshold = tile_size_global**2*gauss_step
+initial_tilesize = 16
 
 dt = {
     "transform": [
@@ -39,16 +49,6 @@ dt = {
     ],
     "scale": 1.0
 }
-
-eps_lb = torch.Tensor([[0,-np.pi,0,0,-0.0,-0.0]]).to('cuda')
-eps_ub = torch.Tensor([[0, np.pi,0,0,0.0,0.0]]).to('cuda')
-tile_size_global = 16
-if method == 'ibp' or method=='crown':
-    gauss_step = 2000
-elif method == 'alpha-crown':
-    gauss_step = 1500
-threshold = tile_size_global**2*gauss_step
-initial_tilesize = 16
 
 def get_rect(
     # Input perturbation 
@@ -600,6 +600,9 @@ if __name__ == "__main__":
         images_ub[x_part,:,:,:] = render_color_ub 
         camera_poses[x_part,:,0] = (cam_inp+eps_lb)[0].detach().cpu().numpy()
         camera_poses[x_part,:,1] = (cam_inp+eps_ub)[0].detach().cpu().numpy()
+
+        np.savez('./dozer2_pi_1000.npz', images_lb=images_lb,images_ub=images_ub,images_noptb=camera_poses)
+
 
         res_lb = np.minimum(res_lb, render_color_lb)
         res_ub = np.maximum(res_ub, render_color_ub)
