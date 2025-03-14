@@ -596,8 +596,10 @@ if __name__ == "__main__":
             # plt.savefig('res_dozer_lb.png')
             # plt.imshow(render_color_ub)
             # plt.savefig('res_dozer_ub.png')
-        images_lb[x_part,:,:,:] = render_color_lb.clip(min=0.0, max=1.0) 
-        images_ub[x_part,:,:,:] = render_color_ub.clip(min=0.0, max=1.0)
+        render_color_lb = render_color_lb.clip(min=0.0, max=1.0) 
+        render_color_ub = render_color_ub.clip(min=0.0, max=1.0)
+        images_lb[x_part,:,:,:] = np.minimize(render_color_lb, render_color_ub)
+        images_ub[x_part,:,:,:] = np.maximize(render_color_lb, render_color_ub)
         camera_poses[x_part,:,0] = (cam_inp+eps_lb)[0].detach().cpu().numpy()
         camera_poses[x_part,:,1] = (cam_inp+eps_ub)[0].detach().cpu().numpy()
 
