@@ -58,8 +58,8 @@ if __name__ == "__main__":
     scale = dt['scale']
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    output_folder = os.path.join(script_dir, '../../nerfstudio/outputs/dozer2/splatfacto/2025-03-11_161130')
-    checkpoint = "step-000029999.ckpt"
+    output_folder = os.path.join(script_dir, '../../nerfstudio/outputs/chair2/splatfacto/2025-03-13_233216')
+    checkpoint = "step-000029999_modified.ckpt"
     
     checkpoint_fn = os.path.join(output_folder, 'nerfstudio_models', checkpoint)
     res = torch.load(checkpoint_fn)
@@ -69,12 +69,12 @@ if __name__ == "__main__":
     scales = res['pipeline']['_model.gauss_params.scales']
     colors = torch.sigmoid(res['pipeline']['_model.gauss_params.features_dc'])
 
-    mask = (means[:,0]>=-0.65) & (means[:,0]<=0.65) & (means[:,1]>=-1.2) & (means[:,1]<=1.2) & (means[:,2]>=-0.4) & (means[:,2]<=1.1)
-    means = means[mask]
-    quats = quats[mask]
-    opacities = opacities[mask]
-    scales = scales[mask]
-    colors = colors[mask]
+    # mask = (means[:,0]>=-0.15) & (means[:,0]<=0.15) & (means[:,1]>=-0.3) & (means[:,1]<=0.1) & (means[:,2]>=-0.8) & (means[:,2]<=-0.3)
+    # means = means[mask]
+    # quats = quats[mask]
+    # opacities = opacities[mask]
+    # scales = scales[mask]
+    # colors = colors[mask]
 
     # Building 
     # mask = (means[:,0]>=-0.023) & (means[:,0]<=0.087) & (means[:,1]>=-0.153) & (means[:,1]<=-0.096) & (means[:,2]>=-0.1725) & (means[:,2]<=-0.06)
@@ -167,9 +167,10 @@ end_header\n\
     )
     plotter.set_background('black')
 
-
-    bottom_left = [-0.65, -1.2, -0.4]    # Example: (xmin, ymin, zmin)
-    top_right   = [0.65, 1.2, 1.1]    # Example: (xmax, ymax, zmax)
+# mask = (means[:,0]>=-0.15) & (means[:,0]<=0.15) & (means[:,1]>=-0.3) & (means[:,1]<=0.1) & (means[:,2]>=-0.7) & (means[:,2]<=-0.29)
+    
+    bottom_left = [-0.15, -0.3, -0.8]    # Example: (xmin, ymin, zmin)
+    top_right   = [0.15, 0.1,  -0.3]    # Example: (xmax, ymax, zmax)
 
     bounds = [bottom_left[0], top_right[0],
         bottom_left[1], top_right[1],
@@ -183,7 +184,7 @@ end_header\n\
     # Overlay the edges using a wireframe style for clear visualization
     plotter.add_mesh(cuboid, color='black', style='wireframe', line_width=2)
 
-    with open(os.path.join(script_dir, '../../nerfstudio/data/dozer2/transforms.json'), 'r') as f:
+    with open(os.path.join(script_dir, '../../nerfstudio/data/chair2/transforms.json'), 'r') as f:
         data_transform = json.load(f)
 
     default_forward = np.array([0, 0, -1])
@@ -209,64 +210,64 @@ end_header\n\
         arrow = pv.Arrow(start=position, direction=forward_world, tip_length=0.2, tip_radius=0.05, shaft_radius=0.02)
         plotter.add_mesh(arrow, color='magenta')
 
-    mat = np.array([
-        [1,0,0,0],
-        [0, 0.2,-0.97979589711 ,-3.7],
-        [0, 0.97979589711 , 0.2, 0.8],
-        [0,0,0,1]
-    ])
-
     # mat = np.array([
     #     [1,0,0,0],
-    #     [0, 0,-1 ,-3.7],
-    #     [0, 1 , 0, 0.8],
+    #     [0, 0.2,-0.97979589711 ,-3.7],
+    #     [0, 0.97979589711 , 0.2, 0.8],
     #     [0,0,0,1]
     # ])
+
+    mat = np.array([
+        [1,0,0,0],
+        [0, 0,-1 ,-3.7],
+        [0, 1 , 0, -0.5],
+        [0,0,0,1]
+    ])
 
     rpy = Rotation.from_matrix(mat[:3,:3]).as_euler('xyz')
     pos = mat[:3,3]
 
-    for i in range(0,200):
-        pnt = sample_point()    
-        yaw = np.arctan2(pnt[1], pnt[0])
-        pitch = np.pi/2-np.arctan2(pnt[2], np.sqrt(pnt[1]**2+pnt[0]**2))
-        # ori = i*np.pi*2/200
-        new_ori = np.array([pitch, 0, yaw])
-        new_ori_mat = Rotation.from_euler('xyz',new_ori).as_matrix()
-        new_pos = np.array([pnt[1],-pnt[0],pnt[2]])
-        new_mat = np.zeros((4,4))
-        new_mat[:3,:3] = new_ori_mat 
-        new_mat[:3,3] = new_pos 
+    # for i in range(0,200):
+    #     pnt = sample_point()    
+    #     yaw = np.arctan2(pnt[1], pnt[0])
+    #     pitch = np.pi/2-np.arctan2(pnt[2], np.sqrt(pnt[1]**2+pnt[0]**2))
+    #     # ori = i*np.pi*2/200
+    #     new_ori = np.array([pitch, 0, yaw])
+    #     new_ori_mat = Rotation.from_euler('xyz',new_ori).as_matrix()
+    #     new_pos = np.array([pnt[1],-pnt[0],pnt[2]])
+    #     new_mat = np.zeros((4,4))
+    #     new_mat[:3,:3] = new_ori_mat 
+    #     new_mat[:3,3] = new_pos 
 
-        new_mat_tensor = torch.Tensor(new_mat)[None,:3,:]
-        view_mats = get_viewmat(new_mat_tensor)
-        camera_pos = view_mats[0,:3,3].detach().cpu().numpy()
-        camera_ori = Rotation.from_matrix(view_mats[0,:3,:3].detach().cpu().numpy()).as_euler('xyz')
-        cam_inp = [
-            camera_ori[0], 
-            camera_ori[1], 
-            camera_ori[2], 
-            camera_pos[0], 
-            camera_pos[1], 
-            camera_pos[2]
-        ]
-        # print(cam_inp)
-        new_mat[3,3] = 1
+    #     new_mat_tensor = torch.Tensor(new_mat)[None,:3,:]
+    #     view_mats = get_viewmat(new_mat_tensor)
+    #     camera_pos = view_mats[0,:3,3].detach().cpu().numpy()
+    #     camera_ori = Rotation.from_matrix(view_mats[0,:3,:3].detach().cpu().numpy()).as_euler('xyz')
+    #     cam_inp = [
+    #         camera_ori[0], 
+    #         camera_ori[1], 
+    #         camera_ori[2], 
+    #         camera_pos[0], 
+    #         camera_pos[1], 
+    #         camera_pos[2]
+    #     ]
+    #     # print(cam_inp)
+    #     new_mat[3,3] = 1
 
-        position = new_pos 
-        rotation = new_ori_mat 
-        # Compute the camera's forward direction in world coordinates
-        # If your convention differs, adjust the default_forward vector accordingly.
-        forward_world = rotation.dot(default_forward)
+    #     position = new_pos 
+    #     rotation = new_ori_mat 
+    #     # Compute the camera's forward direction in world coordinates
+    #     # If your convention differs, adjust the default_forward vector accordingly.
+    #     forward_world = rotation.dot(default_forward)
         
-        # Create a point at the camera position
-        camera_point = pv.PolyData(np.array([position]))
-        plotter.add_mesh(camera_point, color='green', point_size=10, render_points_as_spheres=True)
+    #     # Create a point at the camera position
+    #     camera_point = pv.PolyData(np.array([position]))
+    #     plotter.add_mesh(camera_point, color='green', point_size=10, render_points_as_spheres=True)
         
-        # Create an arrow starting at the camera position pointing in the forward direction.
-        # The length of the arrow can be adjusted (here set to 0.5)
-        arrow = pv.Arrow(start=position, direction=forward_world, tip_length=0.2, tip_radius=0.05, shaft_radius=0.02)
-        plotter.add_mesh(arrow, color='green')
+    #     # Create an arrow starting at the camera position pointing in the forward direction.
+    #     # The length of the arrow can be adjusted (here set to 0.5)
+    #     arrow = pv.Arrow(start=position, direction=forward_world, tip_length=0.2, tip_radius=0.05, shaft_radius=0.02)
+    #     plotter.add_mesh(arrow, color='green')
     
 
     for i in range(0,120):
@@ -275,7 +276,7 @@ end_header\n\
         new_ori = np.array([rpy[0], rpy[1], ori])
         print(new_ori)
         new_ori_mat = Rotation.from_euler('xyz',new_ori).as_matrix()
-        new_pos = np.array([3.7*np.sin(ori), -3.7*np.cos(ori), 0.8])
+        new_pos = np.array([3.7*np.sin(ori), -3.7*np.cos(ori), -0.5])
         new_mat = np.zeros((4,4))
         new_mat[:3,:3] = new_ori_mat 
         new_mat[:3,3] = new_pos 

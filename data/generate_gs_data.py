@@ -4,13 +4,13 @@ import json
 import os 
 
 if __name__ == "__main__":
-    folder_prefix = './lego'
+    folder_prefix = './chair'
     
-    os.mkdir('dozer')
-    os.mkdir('dozer/images')
-    os.mkdir('dozer/images2')
-    os.mkdir('dozer/images4')
-    os.mkdir('dozer/images8')
+    os.mkdir('chair_gs')
+    os.mkdir('chair_gs/images')
+    os.mkdir('chair_gs/images2')
+    os.mkdir('chair_gs/images4')
+    os.mkdir('chair_gs/images8')
     
     # images = data["images"]
     # poses = data["poses"]
@@ -60,9 +60,9 @@ if __name__ == "__main__":
 
         output_dict['frames'].append(frame)
 
-        image.save(os.path.join("dozer/images", output_image_fn))
-        image_2.save(os.path.join("dozer/images2", output_image_fn))
-        image_4.save(os.path.join("dozer/images4", output_image_fn))
-        image_8.save(os.path.join("dozer/images8", output_image_fn))
-    with open('dozer/transform.json', 'w+') as f:
+        image.save(os.path.join("chair_gs/images", output_image_fn))
+        image_2.save(os.path.join("chair_gs/images2", output_image_fn))
+        image_4.save(os.path.join("chair_gs/images4", output_image_fn))
+        image_8.save(os.path.join("chair_gs/images8", output_image_fn))
+    with open('chair_gs/transforms.json', 'w+') as f:
         json.dump(output_dict, f)
