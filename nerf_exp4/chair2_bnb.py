@@ -453,7 +453,7 @@ if __name__ == "__main__":
     images_lb = np.zeros((num_part, height, width, 3))
     images_ub = np.zeros((num_part, height, width, 3))
     camera_poses = np.zeros((num_part, 6, 2))
-    for x_part in range(0,2):
+    for x_part in range(0,num_part):
         print(f"%%%%%%%%%%%%%%%% partition {x_part}")
         # eps_lb= torch.Tensor([[0,0,0,-0.0025+x_part*0.0001,0,0]]).to(means.device)
         # eps_ub = torch.Tensor([[0,0,0,-0.00025+x_part*0.0001+0.0001,0,0]]).to(means.device)
@@ -596,8 +596,10 @@ if __name__ == "__main__":
             # plt.savefig('res_dozer_lb.png')
             # plt.imshow(render_color_ub)
             # plt.savefig('res_dozer_ub.png')
-        images_lb[x_part,:,:,:] = render_color_lb.clip(min=0.0, max=1.0) 
-        images_ub[x_part,:,:,:] = render_color_ub.clip(min=0.0, max=1.0)
+        render_color_lb = render_color_lb.clip(min=0.0, max=1.0) 
+        render_color_ub = render_color_ub.clip(min=0.0, max=1.0)
+        images_lb[x_part,:,:,:] = np.minimum(render_color_lb, render_color_ub)
+        images_ub[x_part,:,:,:] = np.maximum(render_color_lb, render_color_ub)
         camera_poses[x_part,:,0] = (cam_inp+eps_lb)[0].detach().cpu().numpy()
         camera_poses[x_part,:,1] = (cam_inp+eps_ub)[0].detach().cpu().numpy()
 
